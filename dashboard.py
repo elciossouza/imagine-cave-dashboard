@@ -1,0 +1,629 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import gspread
+from google.oauth2.service_account import Credentials
+import numpy as np
+import re
+import logging
+
+# ─────────────────────────────────────────────
+# SEGURANÇA — logging server-side apenas
+# ─────────────────────────────────────────────
+logging.basicConfig(level=logging.ERROR, format="%(asctime)s [%(levelname)s] %(message)s")
+_logger = logging.getLogger(__name__)
+
+def _sanitize_error(err: Exception) -> str:
+    raw = str(err)
+    try:
+        _sid = st.secrets.get("spreadsheet", {}).get("id", "")
+        if _sid:
+            raw = raw.replace(_sid, "***")
+    except Exception:
+        pass
+    patterns = [
+        (r"https?://[^\s]+", "[URL ocultada]"),
+        (r"[a-zA-Z0-9_-]{20,}", "***"),
+        (r"[\w.+-]+@[\w-]+\.[\w.]+", "[email ocultado]"),
+    ]
+    for pattern, replacement in patterns:
+        raw = re.sub(pattern, replacement, raw)
+    return raw
+
+# ─────────────────────────────────────────────
+# CONFIGURAÇÃO DA PÁGINA
+# ─────────────────────────────────────────────
+st.set_page_config(
+    page_title="Imagine Cave | Dashboard",
+    page_icon="🪩",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown("""
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="X-Frame-Options" content="DENY">
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# MAPEAMENTO DE COLUNAS (nomes exatos da planilha)
+# ─────────────────────────────────────────────
+C = {
+    "mes":     "Mes",
+    "canal":   "Canal",
+    "tipo":    "Tipo",
+    "leads":   "Leads",
+    "vendas":  "Vendas",
+    "receita": "Receita_USD",
+    "invest":  "Investimento_USD",
+    "cpl":     "Custo_por_lead_CPL",
+    "cpv":     "Custo_por_venda_CPV",
+    "conv":    "Conversao_Leads_Vendas",
+    "ticket":  "Ticket_medio",
+    "roas":    "ROAS",
+}
+
+# ─────────────────────────────────────────────
+# CSS
+# ─────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500&display=swap');
+:root {
+    --primary: #E040FB;
+    --primary-dark: #AB00D6;
+    --accent: #FF4081;
+    --accent2: #7C4DFF;
+    --bg-dark: #0A0010;
+    --bg-card: #120020;
+    --text-main: #F3E5F5;
+    --text-muted: #9E7BB5;
+    --border: rgba(224,64,251,0.18);
+    --red: #FF4081;
+    --green: #69FF47;
+}
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color: var(--bg-dark); color: var(--text-main); }
+.stApp { background: radial-gradient(ellipse at top, #1a0030 0%, #0A0010 50%, #000510 100%); }
+.dashboard-header { padding: 1.5rem 0 2rem 0; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+.brand-name { font-family: 'Rajdhani', sans-serif; font-size: 2.2rem; font-weight: 700; background: linear-gradient(90deg, #E040FB, #FF4081, #7C4DFF); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 2px; text-transform: uppercase; }
+.brand-sub { font-size: 0.75rem; color: var(--text-muted); font-weight: 300; letter-spacing: 3px; text-transform: uppercase; margin-top: 2px; }
+.kpi-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 1.4rem 1.6rem; position: relative; overflow: hidden; }
+.kpi-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #E040FB, #FF4081, #7C4DFF); border-radius: 16px 16px 0 0; }
+.kpi-card::after { content: ''; position: absolute; top: -40px; right: -40px; width: 100px; height: 100px; background: radial-gradient(circle, rgba(224,64,251,0.08) 0%, transparent 70%); border-radius: 50%; }
+.kpi-label { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px; font-weight: 500; margin-bottom: 0.5rem; }
+.kpi-value { font-family: 'Rajdhani', sans-serif; font-size: 2rem; font-weight: 700; color: var(--text-main); line-height: 1; margin-bottom: 0.5rem; }
+.kpi-delta { font-size: 0.78rem; font-weight: 500; }
+.delta-up { color: var(--green); } .delta-down { color: var(--red); }
+.insight-box { background: linear-gradient(135deg, rgba(224,64,251,0.07), rgba(124,77,255,0.05)); border: 1px solid rgba(224,64,251,0.2); border-left: 4px solid var(--primary); border-radius: 12px; padding: 1rem 1.4rem; margin: 1rem 0; font-size: 0.88rem; color: var(--text-muted); }
+.insight-box strong { color: var(--primary); }
+.section-title { font-family: 'Rajdhani', sans-serif; font-size: 1.2rem; font-weight: 700; color: var(--text-main); margin: 2rem 0 1rem 0; display: flex; align-items: center; gap: 10px; letter-spacing: 1px; text-transform: uppercase; }
+.section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.stTabs [data-baseweb="tab-list"] { background: var(--bg-card); border-radius: 12px; padding: 4px; gap: 4px; border: 1px solid var(--border); }
+.stTabs [data-baseweb="tab"] { font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 0.9rem; color: var(--text-muted); border-radius: 8px; padding: 0.5rem 1.2rem; letter-spacing: 0.5px; }
+.stTabs [aria-selected="true"] { background: linear-gradient(135deg, #E040FB, #7C4DFF) !important; color: white !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# TEMA PLOTLY
+# ─────────────────────────────────────────────
+PLOT_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(family="Inter", color="#9E7BB5"),
+    xaxis=dict(gridcolor="rgba(224,64,251,0.08)", zerolinecolor="rgba(224,64,251,0.08)"),
+    yaxis=dict(gridcolor="rgba(224,64,251,0.08)", zerolinecolor="rgba(224,64,251,0.08)"),
+    margin=dict(l=10, r=10, t=40, b=10),
+    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#9E7BB5")),
+)
+COLORS = ["#E040FB", "#FF4081", "#7C4DFF", "#69FF47", "#FF6D00", "#40C4FF", "#FFD740"]
+
+# ─────────────────────────────────────────────
+# GOOGLE SHEETS
+# ─────────────────────────────────────────────
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
+]
+
+@st.cache_data(ttl=300)
+def load_sheet(sheet_name: str) -> pd.DataFrame:
+    try:
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
+        client = gspread.authorize(creds)
+        sh = client.open_by_key(st.secrets["spreadsheet"]["id"])
+        data = sh.worksheet(sheet_name).get_all_records()
+        return pd.DataFrame(data)
+    except Exception as e:
+        _logger.error("Falha ao carregar '%s': %s", sheet_name, e)
+        st.error(f"⚠️ Não foi possível carregar os dados ({sheet_name}).\n\n_Detalhe: {_sanitize_error(e)}_")
+        return pd.DataFrame()
+
+# ─────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────
+def safe_num(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(
+        s.astype(str).str.replace("$","",regex=False).str.replace("R$","",regex=False)
+         .str.replace(".","",regex=False).str.replace(",",".",regex=False)
+         .str.replace("%","",regex=False).str.strip(),
+        errors="coerce").fillna(0)
+
+def fmt_usd(v): return f"$ {v:,.2f}"
+def fmt_pct(v): return f"{v:.1f}%"
+def fmt_int(v): return f"{int(v):,}".replace(",", ".")
+def fmt_x(v):   return f"{v:.2f}x"
+
+def delta_html(cur, prv, inverse=False):
+    if prv == 0: return ""
+    diff = ((cur - prv) / abs(prv)) * 100
+    up = (diff >= 0) if not inverse else (diff < 0)
+    css = "delta-up" if up else "delta-down"
+    arrow = "▲" if diff >= 0 else "▼"
+    return f'<span class="kpi-delta {css}">{arrow} {abs(diff):.1f}% vs mês anterior</span>'
+
+def kpi_card(label, value, delta="", icon=""):
+    st.markdown(f'<div class="kpi-card"><div class="kpi-label">{icon} {label}</div>'
+                f'<div class="kpi-value">{value}</div>{delta}</div>', unsafe_allow_html=True)
+
+def prep(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    if df.empty: return df
+    for col in cols:
+        if col in df.columns:
+            df[col] = safe_num(df[col])
+    return df
+
+def calc_derived(df: pd.DataFrame) -> pd.DataFrame:
+    """Calcula CPL, CPA, ROAS, Conversão e Ticket a partir das colunas base."""
+    if df.empty: return df
+    leads  = df[C["leads"]].where(df[C["leads"]]  > 0) if C["leads"]  in df.columns else pd.Series(np.nan, index=df.index)
+    vendas = df[C["vendas"]].where(df[C["vendas"]] > 0) if C["vendas"] in df.columns else pd.Series(np.nan, index=df.index)
+    rec    = df[C["receita"]] if C["receita"] in df.columns else pd.Series(0, index=df.index)
+    inv    = df[C["invest"]].where(df[C["invest"]]  > 0) if C["invest"]  in df.columns else pd.Series(np.nan, index=df.index)
+    df[C["cpl"]]    = (inv    / leads).fillna(0)
+    df[C["cpv"]]    = (inv    / vendas).fillna(0)
+    df[C["roas"]]   = (rec    / inv).fillna(0)
+    df[C["conv"]]   = (df[C["vendas"]] / leads * 100).fillna(0) if C["vendas"] in df.columns else 0
+    df[C["ticket"]] = (rec    / vendas).fillna(0)
+    return df
+
+def filt(df, month):
+    if df.empty or not month or C["mes"] not in df.columns: return df
+    return df[df[C["mes"]] == month]
+
+def prev(df, month):
+    if df.empty or not month or C["mes"] not in df.columns: return pd.DataFrame()
+    months = df[C["mes"]].dropna().unique().tolist()
+    if month not in months: return pd.DataFrame()
+    idx = months.index(month)
+    if idx == 0: return pd.DataFrame()
+    return df[df[C["mes"]] == months[idx - 1]]
+
+def agg(df, col):
+    if df.empty or col not in df.columns: return 0
+    return df[col].sum()
+
+# ─────────────────────────────────────────────
+# HEADER
+# ─────────────────────────────────────────────
+st.markdown("""
+<div class="dashboard-header">
+    <div class="brand-name">🪩 Imagine Cave</div>
+    <div class="brand-sub">Dashboard de Performance · Punta Cana · República Dominicana</div>
+</div>""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# CARREGAMENTO E PRÉ-PROCESSAMENTO
+# ─────────────────────────────────────────────
+with st.spinner("Carregando dados..."):
+    df_canais   = load_sheet("Base_Canais")
+    df_total    = load_sheet("Resumo_Total")
+    df_pago     = load_sheet("Resumo_Midia_Paga")
+    df_organico = load_sheet("Resumo_Organico")
+
+COLS_BASE    = [C["leads"], C["vendas"], C["receita"], C["invest"]]
+COLS_RESUMO  = [C["leads"], C["vendas"], C["receita"], C["invest"],
+                C["cpl"], C["cpv"], C["conv"], C["ticket"], C["roas"]]
+
+df_canais   = calc_derived(prep(df_canais,   COLS_BASE))
+df_total    = prep(df_total,    COLS_RESUMO)
+df_pago     = prep(df_pago,     COLS_RESUMO)
+df_organico = prep(df_organico, COLS_RESUMO)
+
+if df_canais.empty and df_total.empty:
+    st.warning("⚠️ Nenhum dado encontrado. Verifique as credenciais e o ID da planilha.")
+    st.stop()
+
+# ── Seletor de mês ──
+src_months = df_total if not df_total.empty else df_canais
+all_months_raw = src_months[C["mes"]].dropna().unique().tolist() if C["mes"] in src_months.columns else []
+
+MESES_PT = {
+    "01": "Janeiro", "02": "Fevereiro", "03": "Março",
+    "04": "Abril",   "05": "Maio",      "06": "Junho",
+    "07": "Julho",   "08": "Agosto",    "09": "Setembro",
+    "10": "Outubro", "11": "Novembro",  "12": "Dezembro",
+}
+
+def fmt_mes(val: str) -> str:
+    """Converte '01/01/2026' ou '2026-01-01' em 'Janeiro/2026'."""
+    val = str(val).strip()
+    try:
+        if "/" in val:
+            parts = val.split("/")
+            if len(parts) == 3:
+                mes, ano = parts[1].zfill(2), parts[2]
+                return f"{MESES_PT.get(mes, mes)}/{ano}"
+        if "-" in val:
+            parts = val.split("-")
+            if len(parts) == 3:
+                mes, ano = parts[1].zfill(2), parts[0]
+                return f"{MESES_PT.get(mes, mes)}/{ano}"
+    except Exception:
+        pass
+    return val
+
+# Dicionário: nome legível → valor raw para filtro
+month_labels = {fmt_mes(m): m for m in all_months_raw}
+month_options = list(month_labels.keys())  # ex: ["Janeiro/2026", "Fevereiro/2026"]
+
+col_f1, col_f2 = st.columns([4, 1])
+with col_f1:
+    mes_label = st.selectbox("📅 Selecionar Mês", options=month_options,
+                             index=len(month_options) - 1 if month_options else 0)
+with col_f2:
+    if st.button("🔄 Atualizar", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+# Valor real para filtrar o DataFrame
+mes_sel = month_labels.get(mes_label, mes_label)
+
+st.markdown("---")
+
+# Dados filtrados
+df_c_mes  = filt(df_canais,   mes_sel)
+df_c_prv  = prev(df_canais,   mes_sel)
+df_t_mes  = filt(df_total,    mes_sel)
+df_t_prv  = prev(df_total,    mes_sel)
+df_p_mes  = filt(df_pago,     mes_sel)
+df_o_mes  = filt(df_organico, mes_sel)
+
+# ─────────────────────────────────────────────
+# ABAS
+# ─────────────────────────────────────────────
+tab1, tab2, tab3 = st.tabs(["📊  Visão Geral", "🎯  Análise por Canal", "💡  Pago vs Orgânico"])
+
+# ════════════════════════════════════════════
+# ABA 1 — VISÃO GERAL
+# ════════════════════════════════════════════
+with tab1:
+    # Usa Resumo_Total como fonte primária (já consolidado)
+    src, src_prv = (df_t_mes, df_t_prv) if not df_t_mes.empty else (df_c_mes, df_c_prv)
+
+    receita = agg(src,     C["receita"])
+    leads   = agg(src,     C["leads"])
+    vendas  = agg(src,     C["vendas"])
+    invest  = agg(src,     C["invest"])
+    roas    = agg(src,     C["roas"])
+    conv    = agg(src,     C["conv"])
+    r_prv   = agg(src_prv, C["receita"])
+    l_prv   = agg(src_prv, C["leads"])
+    v_prv   = agg(src_prv, C["vendas"])
+    i_prv   = agg(src_prv, C["invest"])
+    roas_prv= agg(src_prv, C["roas"])
+    conv_prv= agg(src_prv, C["conv"])
+
+    # KPIs
+    st.markdown('<div class="section-title">🏆 KPIs do Mês</div>', unsafe_allow_html=True)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    with c1: kpi_card("Receita Total",   fmt_usd(receita), delta_html(receita, r_prv),           "💰")
+    with c2: kpi_card("Leads Gerados",   fmt_int(leads),   delta_html(leads,   l_prv),           "🎯")
+    with c3: kpi_card("Vendas Fechadas", fmt_int(vendas),  delta_html(vendas,  v_prv),           "🤝")
+    with c4: kpi_card("Conversão",       fmt_pct(conv),    delta_html(conv,    conv_prv),        "📈")
+    with c5: kpi_card("Investimento",    fmt_usd(invest),  delta_html(invest,  i_prv, inverse=True), "💸")
+    with c6: kpi_card("ROAS",            fmt_x(roas),      delta_html(roas,    roas_prv),        "🚀")
+
+    # Cresceu ou caiu
+    if r_prv > 0:
+        var = ((receita - r_prv) / r_prv) * 100
+        if var >= 0:
+            st.success(f"📈 Crescemos **{var:.1f}%** vs mês anterior  ({fmt_usd(r_prv)} → {fmt_usd(receita)})")
+        else:
+            st.error(f"📉 Caímos **{abs(var):.1f}%** vs mês anterior  ({fmt_usd(r_prv)} → {fmt_usd(receita)})")
+
+    # Insight
+    canal_top = ""
+    if not df_c_mes.empty and C["canal"] in df_c_mes.columns and C["receita"] in df_c_mes.columns:
+        canal_top = df_c_mes.groupby(C["canal"])[C["receita"]].sum().idxmax()
+    txt = f"Este mês: <strong>{fmt_usd(receita)}</strong> em receita"
+    if r_prv > 0:
+        diff = ((receita - r_prv) / r_prv) * 100
+        txt += f" ({'+' if diff>=0 else ''}{diff:.1f}% vs anterior)"
+    if canal_top:
+        txt += f". Canal líder: <strong>{canal_top}</strong>."
+    st.markdown(f'<div class="insight-box">💡 {txt}</div>', unsafe_allow_html=True)
+
+    # Evolução histórica
+    if not df_total.empty and C["mes"] in df_total.columns:
+        st.markdown('<div class="section-title">📅 Evolução Histórica</div>', unsafe_allow_html=True)
+        ht1, ht2, ht3 = st.tabs(["Receita & Investimento", "Leads & Vendas", "ROAS & Conversão"])
+
+        with ht1:
+            fig = go.Figure()
+            if C["receita"] in df_total.columns:
+                fig.add_trace(go.Bar(x=df_total[C["mes"]], y=df_total[C["receita"]],
+                                     name="Receita USD", marker_color=COLORS[0], opacity=0.9))
+            if C["invest"] in df_total.columns:
+                fig.add_trace(go.Scatter(x=df_total[C["mes"]], y=df_total[C["invest"]],
+                                         name="Investimento USD", mode="lines+markers",
+                                         line=dict(color=COLORS[2], width=2.5, dash="dot"), marker=dict(size=6)))
+            fig.update_layout(**PLOT_LAYOUT, title="Receita vs Investimento (USD)", height=340)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with ht2:
+            fig2 = go.Figure()
+            if C["leads"] in df_total.columns:
+                fig2.add_trace(go.Bar(x=df_total[C["mes"]], y=df_total[C["leads"]],
+                                      name="Leads", marker_color=COLORS[1], opacity=0.9))
+            if C["vendas"] in df_total.columns:
+                fig2.add_trace(go.Scatter(x=df_total[C["mes"]], y=df_total[C["vendas"]],
+                                          name="Vendas", mode="lines+markers",
+                                          line=dict(color=COLORS[0], width=2.5), marker=dict(size=7)))
+            fig2.update_layout(**PLOT_LAYOUT, title="Leads vs Vendas", height=340)
+            st.plotly_chart(fig2, use_container_width=True)
+
+        with ht3:
+            fig3 = make_subplots(specs=[[{"secondary_y": True}]])
+            if C["roas"] in df_total.columns:
+                fig3.add_trace(go.Scatter(x=df_total[C["mes"]], y=df_total[C["roas"]],
+                                          name="ROAS", mode="lines+markers",
+                                          line=dict(color=COLORS[0], width=2.5), marker=dict(size=7)), secondary_y=False)
+            if C["conv"] in df_total.columns:
+                fig3.add_trace(go.Scatter(x=df_total[C["mes"]], y=df_total[C["conv"]],
+                                          name="Conversão %", mode="lines+markers",
+                                          line=dict(color=COLORS[1], width=2.5, dash="dash"), marker=dict(size=7)), secondary_y=True)
+            fig3.update_layout(**PLOT_LAYOUT, title="ROAS & Conversão mês a mês", height=340)
+            st.plotly_chart(fig3, use_container_width=True)
+
+    # Gráficos por canal
+    if not df_c_mes.empty and C["canal"] in df_c_mes.columns:
+        st.markdown('<div class="section-title">📊 Distribuição por Canal</div>', unsafe_allow_html=True)
+        g1, g2 = st.columns(2)
+        with g1:
+            df_r = df_c_mes.groupby(C["canal"])[C["receita"]].sum().reset_index().sort_values(C["receita"], ascending=True)
+            fig_b = px.bar(df_r, x=C["receita"], y=C["canal"], orientation="h",
+                           color=C["canal"], color_discrete_sequence=COLORS, title="Receita por Canal (USD)")
+            fig_b.update_layout(**PLOT_LAYOUT, showlegend=False, height=320)
+            st.plotly_chart(fig_b, use_container_width=True)
+        with g2:
+            df_l = df_c_mes.groupby(C["canal"])[C["leads"]].sum().reset_index().sort_values(C["leads"], ascending=True)
+            fig_l = px.bar(df_l, x=C["leads"], y=C["canal"], orientation="h",
+                           color=C["canal"], color_discrete_sequence=COLORS, title="Leads por Canal")
+            fig_l.update_layout(**PLOT_LAYOUT, showlegend=False, height=320)
+            st.plotly_chart(fig_l, use_container_width=True)
+
+        if C["tipo"] in df_c_mes.columns:
+            df_tipo = df_c_mes.groupby(C["tipo"])[C["receita"]].sum().reset_index()
+            fig_p = px.pie(df_tipo, names=C["tipo"], values=C["receita"],
+                           color_discrete_sequence=COLORS, title="Receita: Pago vs Orgânico", hole=0.5)
+            fig_p.update_traces(textinfo="percent+label")
+            fig_p.update_layout(**PLOT_LAYOUT, height=320)
+            st.plotly_chart(fig_p, use_container_width=True)
+
+
+# ════════════════════════════════════════════
+# ABA 2 — ANÁLISE POR CANAL
+# ════════════════════════════════════════════
+with tab2:
+    if df_c_mes.empty or C["canal"] not in df_c_mes.columns:
+        st.info("Sem dados de canais para o período selecionado.")
+    else:
+        st.markdown('<div class="section-title">📋 Tabela Estratégica por Canal</div>', unsafe_allow_html=True)
+
+        agg_map = {col: "sum" for col in COLS_BASE if col in df_c_mes.columns}
+        df_tab = df_c_mes.groupby(C["canal"]).agg(agg_map).reset_index()
+        df_tab = calc_derived(df_tab)
+
+        # Display formatado
+        col_map = {
+            C["canal"]:   "Canal",
+            C["leads"]:   "Leads",
+            C["vendas"]:  "Vendas",
+            C["conv"]:    "Conversão %",
+            C["receita"]: "Receita (USD)",
+            C["invest"]:  "Investimento (USD)",
+            C["cpl"]:     "CPL",
+            C["cpv"]:     "CPA",
+            C["roas"]:    "ROAS",
+            C["ticket"]:  "Ticket Médio",
+        }
+        cols_exist = [c for c in col_map if c in df_tab.columns]
+        df_disp = df_tab[cols_exist].rename(columns=col_map).copy()
+
+        for col in ["Receita (USD)", "Investimento (USD)", "CPL", "CPA", "Ticket Médio"]:
+            if col in df_disp.columns:
+                df_disp[col] = df_disp[col].apply(fmt_usd)
+        if "Conversão %" in df_disp.columns:
+            df_disp["Conversão %"] = df_disp["Conversão %"].apply(fmt_pct)
+        if "ROAS" in df_disp.columns:
+            df_disp["ROAS"] = df_disp["ROAS"].apply(fmt_x)
+
+        st.dataframe(df_disp, use_container_width=True, hide_index=True)
+
+        # Insights
+        insights = []
+        if C["roas"]   in df_tab.columns and df_tab[C["roas"]].sum()   > 0:
+            insights.append(f"🏆 Melhor ROAS: <strong>{df_tab.loc[df_tab[C['roas']].idxmax(),   C['canal']]}</strong>")
+        if C["cpl"]    in df_tab.columns and df_tab[C["cpl"]].sum()    > 0:
+            insights.append(f"💰 Menor CPL: <strong>{df_tab.loc[df_tab[C['cpl']].idxmin(),    C['canal']]}</strong>")
+        if C["cpv"]    in df_tab.columns and df_tab[C["cpv"]].sum()    > 0:
+            insights.append(f"🎯 Menor CPA: <strong>{df_tab.loc[df_tab[C['cpv']].idxmin(),    C['canal']]}</strong>")
+        if C["conv"]   in df_tab.columns and df_tab[C["conv"]].sum()   > 0:
+            insights.append(f"📈 Maior Conversão: <strong>{df_tab.loc[df_tab[C['conv']].idxmax(),  C['canal']]}</strong>")
+        if C["ticket"] in df_tab.columns and df_tab[C["ticket"]].sum() > 0:
+            insights.append(f"💎 Maior Ticket: <strong>{df_tab.loc[df_tab[C['ticket']].idxmax(), C['canal']]}</strong>")
+        if insights:
+            st.markdown(f'<div class="insight-box">{"  ·  ".join(insights)}</div>', unsafe_allow_html=True)
+
+        # Gráficos
+        st.markdown('<div class="section-title">📈 Comparativos por Canal</div>', unsafe_allow_html=True)
+        gc1, gc2 = st.columns(2)
+        with gc1:
+            if C["roas"] in df_tab.columns:
+                # Maior ROAS no topo → ascending=True (plotly renderiza de baixo pra cima)
+                fig_r = px.bar(df_tab.sort_values(C["roas"], ascending=True),
+                               x=C["roas"], y=C["canal"], orientation="h",
+                               color=C["canal"], color_discrete_sequence=COLORS, title="ROAS por Canal")
+                fig_r.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
+                st.plotly_chart(fig_r, use_container_width=True)
+            if C["cpv"] in df_tab.columns:
+                # Menor CPA no topo (melhor) → ascending=True
+                fig_cpa = px.bar(df_tab.sort_values(C["cpv"], ascending=True),
+                                 x=C["cpv"], y=C["canal"], orientation="h",
+                                 color=C["canal"], color_discrete_sequence=COLORS, title="CPA por Canal (menor = melhor)")
+                fig_cpa.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
+                st.plotly_chart(fig_cpa, use_container_width=True)
+        with gc2:
+            if C["cpl"] in df_tab.columns:
+                # Menor CPL no topo (melhor) → ascending=True
+                fig_cpl = px.bar(df_tab.sort_values(C["cpl"], ascending=True),
+                                 x=C["cpl"], y=C["canal"], orientation="h",
+                                 color=C["canal"], color_discrete_sequence=COLORS, title="CPL por Canal (menor = melhor)")
+                fig_cpl.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
+                st.plotly_chart(fig_cpl, use_container_width=True)
+            if C["conv"] in df_tab.columns:
+                # Maior conversão no topo → ascending=True
+                fig_conv = px.bar(df_tab.sort_values(C["conv"], ascending=True),
+                                  x=C["conv"], y=C["canal"], orientation="h",
+                                  color=C["canal"], color_discrete_sequence=COLORS, title="Conversão % por Canal")
+                fig_conv.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
+                st.plotly_chart(fig_conv, use_container_width=True)
+
+        # Investimento vs Receita
+        st.markdown('<div class="section-title">💸 Investimento → Receita por Canal</div>', unsafe_allow_html=True)
+        df_iv = df_tab.melt(id_vars=C["canal"], value_vars=[c for c in [C["receita"], C["invest"]] if c in df_tab.columns],
+                            var_name="Métrica", value_name="Valor")
+        df_iv["Métrica"] = df_iv["Métrica"].map({C["receita"]: "Receita USD", C["invest"]: "Investimento USD"})
+        fig_iv = px.bar(df_iv, x=C["canal"], y="Valor", color="Métrica", barmode="group",
+                        color_discrete_sequence=[COLORS[0], COLORS[2]], title="Investimento vs Receita por Canal")
+        fig_iv.update_layout(**PLOT_LAYOUT, height=360)
+        st.plotly_chart(fig_iv, use_container_width=True)
+
+
+# ════════════════════════════════════════════
+# ABA 3 — PAGO VS ORGÂNICO
+# ════════════════════════════════════════════
+with tab3:
+    rec_p  = agg(df_p_mes, C["receita"])
+    rec_o  = agg(df_o_mes, C["receita"])
+    lead_p = agg(df_p_mes, C["leads"])
+    lead_o = agg(df_o_mes, C["leads"])
+    inv_p  = agg(df_p_mes, C["invest"])
+    roas_p = agg(df_p_mes, C["roas"])
+    roas_o = agg(df_o_mes, C["roas"])
+    cpl_p  = agg(df_p_mes, C["cpl"])
+
+    rec_tot  = rec_p  + rec_o
+    lead_tot = lead_p + lead_o
+
+    pct_rp = rec_p  / rec_tot  * 100 if rec_tot  else 0
+    pct_ro = rec_o  / rec_tot  * 100 if rec_tot  else 0
+    pct_lp = lead_p / lead_tot * 100 if lead_tot else 0
+    pct_lo = lead_o / lead_tot * 100 if lead_tot else 0
+
+    st.markdown('<div class="section-title">📊 Participação no Mês</div>', unsafe_allow_html=True)
+    pk1, pk2, pk3, pk4 = st.columns(4)
+    with pk1: kpi_card("% Receita Pago",     fmt_pct(pct_rp), "", "💰")
+    with pk2: kpi_card("% Receita Orgânico", fmt_pct(pct_ro), "", "🌱")
+    with pk3: kpi_card("% Leads Pago",       fmt_pct(pct_lp), "", "🎯")
+    with pk4: kpi_card("% Leads Orgânico",   fmt_pct(pct_lo), "", "🌿")
+
+    # Insight dependência
+    if pct_rp > 70:
+        dep = f"⚠️ Negócio <strong>muito dependente de mídia paga</strong> ({pct_rp:.0f}%). Se desligar anúncios, restariam apenas <strong>{fmt_usd(rec_o)}</strong> em receita orgânica."
+    elif pct_rp > 50:
+        dep = f"📌 Pago domina com <strong>{pct_rp:.0f}%</strong>. Orgânico sustenta <strong>{fmt_usd(rec_o)}</strong>. Atenção à dependência crescente."
+    else:
+        dep = f"✅ Ótimo equilíbrio! Orgânico representa <strong>{pct_ro:.0f}%</strong>. Negócio tem base sólida sem anúncios."
+    st.markdown(f'<div class="insight-box">{dep}</div>', unsafe_allow_html=True)
+
+    # Pizzas
+    pg1, pg2 = st.columns(2)
+    with pg1:
+        if rec_tot > 0:
+            fig_pr = px.pie(values=[rec_p, rec_o], names=["Pago", "Orgânico"],
+                            title="Receita: Pago vs Orgânico",
+                            color_discrete_sequence=[COLORS[0], COLORS[1]], hole=0.55)
+            fig_pr.update_traces(textinfo="percent+label")
+            fig_pr.update_layout(**PLOT_LAYOUT, height=320)
+            st.plotly_chart(fig_pr, use_container_width=True)
+    with pg2:
+        if lead_tot > 0:
+            fig_pl = px.pie(values=[lead_p, lead_o], names=["Pago", "Orgânico"],
+                            title="Leads: Pago vs Orgânico",
+                            color_discrete_sequence=[COLORS[2], COLORS[3]], hole=0.55)
+            fig_pl.update_traces(textinfo="percent+label")
+            fig_pl.update_layout(**PLOT_LAYOUT, height=320)
+            st.plotly_chart(fig_pl, use_container_width=True)
+
+    # Evolução mensal
+    st.markdown('<div class="section-title">📅 Evolução Mensal</div>', unsafe_allow_html=True)
+    if not df_pago.empty and not df_organico.empty and C["mes"] in df_pago.columns:
+        fig_evo = go.Figure()
+        if C["receita"] in df_pago.columns:
+            fig_evo.add_trace(go.Scatter(x=df_pago[C["mes"]], y=df_pago[C["receita"]],
+                                         name="Receita Pago", line=dict(color=COLORS[0], width=2.5),
+                                         mode="lines+markers", fill="tozeroy",
+                                         fillcolor="rgba(0,201,167,0.08)", marker=dict(size=7)))
+        if C["receita"] in df_organico.columns:
+            fig_evo.add_trace(go.Scatter(x=df_organico[C["mes"]], y=df_organico[C["receita"]],
+                                         name="Receita Orgânico", line=dict(color=COLORS[1], width=2.5),
+                                         mode="lines+markers", fill="tozeroy",
+                                         fillcolor="rgba(255,209,102,0.08)", marker=dict(size=7)))
+        if C["invest"] in df_pago.columns:
+            fig_evo.add_trace(go.Scatter(x=df_pago[C["mes"]], y=df_pago[C["invest"]],
+                                         name="Investimento Pago", line=dict(color=COLORS[2], width=2, dash="dot"),
+                                         mode="lines+markers", marker=dict(size=6, symbol="diamond")))
+        fig_evo.update_layout(**PLOT_LAYOUT, title="Receita Pago vs Orgânico vs Investimento (USD)", height=400)
+        st.plotly_chart(fig_evo, use_container_width=True)
+
+    # ROAS evolução
+    if not df_pago.empty and not df_organico.empty and C["roas"] in df_pago.columns:
+        st.markdown('<div class="section-title">🚀 ROAS: Pago vs Orgânico</div>', unsafe_allow_html=True)
+        fig_revo = go.Figure()
+        fig_revo.add_trace(go.Scatter(x=df_pago[C["mes"]], y=df_pago[C["roas"]],
+                                      name="ROAS Pago", line=dict(color=COLORS[0], width=2.5),
+                                      mode="lines+markers", marker=dict(size=8)))
+        if C["roas"] in df_organico.columns:
+            fig_revo.add_trace(go.Scatter(x=df_organico[C["mes"]], y=df_organico[C["roas"]],
+                                          name="ROAS Orgânico", line=dict(color=COLORS[1], width=2.5, dash="dash"),
+                                          mode="lines+markers", marker=dict(size=8)))
+        fig_revo.update_layout(**PLOT_LAYOUT, title="Evolução do ROAS mês a mês", height=320)
+        st.plotly_chart(fig_revo, use_container_width=True)
+
+    # CAC pago
+    if not df_pago.empty and C["cpl"] in df_pago.columns and C["mes"] in df_pago.columns:
+        st.markdown('<div class="section-title">💸 CAC Pago ao Longo do Tempo</div>', unsafe_allow_html=True)
+        fig_cac = px.line(df_pago, x=C["mes"], y=C["cpl"], markers=True,
+                          title="CAC Pago (CPL) mês a mês", color_discrete_sequence=[COLORS[2]])
+        fig_cac.update_traces(line_width=2.5, marker_size=8)
+        fig_cac.update_layout(**PLOT_LAYOUT, height=300)
+        st.plotly_chart(fig_cac, use_container_width=True)
+
+        vals = df_pago[C["cpl"]].dropna().values
+        if len(vals) >= 2:
+            trend = "aumentando 📈 — custo crescente" if vals[-1] > vals[-2] else "diminuindo ✅ — eficiência melhorando"
+            st.markdown(f'<div class="insight-box">CAC pago está <strong>{trend}</strong>. Último valor: <strong>{fmt_usd(vals[-1])}</strong></div>',
+                        unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# FOOTER
+# ─────────────────────────────────────────────
+st.markdown("---")
+st.markdown("""
+<div style="text-align:center; color: #4a3060; font-size: 0.75rem; padding: 1rem 0;">
+    🪩 Imagine Cave · Dashboard de Marketing Digital ·
+    Dados atualizados automaticamente · Powered by Élcio Souza
+</div>""", unsafe_allow_html=True)
