@@ -252,7 +252,12 @@ def fmt_mes(val: str) -> str:
     try:
         if "/" in val:
             parts = val.split("/")
+            if len(parts) == 2:
+                # formato M/AA ex: 1/26
+                mes, ano = parts[0].zfill(2), "20" + parts[1]
+                return f"{MESES_PT.get(mes, mes)}/{ano}"
             if len(parts) == 3:
+                # formato DD/MM/YYYY
                 mes, ano = parts[1].zfill(2), parts[2]
                 return f"{MESES_PT.get(mes, mes)}/{ano}"
         if "-" in val:
@@ -392,13 +397,13 @@ with tab1:
         st.markdown('<div class="section-title">📊 Distribuição por Canal</div>', unsafe_allow_html=True)
         g1, g2 = st.columns(2)
         with g1:
-            df_r = df_c_mes.groupby(C["canal"])[C["receita"]].sum().reset_index().sort_values(C["receita"], ascending=True)
+            df_r = df_c_mes.groupby(C["canal"])[C["receita"]].sum().reset_index().sort_values(C["receita"], ascending=False)
             fig_b = px.bar(df_r, x=C["receita"], y=C["canal"], orientation="h",
                            color=C["canal"], color_discrete_sequence=COLORS, title="Receita por Canal (USD)")
             fig_b.update_layout(**PLOT_LAYOUT, showlegend=False, height=320)
             st.plotly_chart(fig_b, use_container_width=True)
         with g2:
-            df_l = df_c_mes.groupby(C["canal"])[C["leads"]].sum().reset_index().sort_values(C["leads"], ascending=True)
+            df_l = df_c_mes.groupby(C["canal"])[C["leads"]].sum().reset_index().sort_values(C["leads"], ascending=False)
             fig_l = px.bar(df_l, x=C["leads"], y=C["canal"], orientation="h",
                            color=C["canal"], color_discrete_sequence=COLORS, title="Leads por Canal")
             fig_l.update_layout(**PLOT_LAYOUT, showlegend=False, height=320)
@@ -472,30 +477,30 @@ with tab2:
         gc1, gc2 = st.columns(2)
         with gc1:
             if C["roas"] in df_tab.columns:
-                # Maior ROAS no topo → ascending=True (plotly renderiza de baixo pra cima)
-                fig_r = px.bar(df_tab.sort_values(C["roas"], ascending=True),
+                # Maior ROAS no topo → ascending=False (plotly renderiza de baixo pra cima)
+                fig_r = px.bar(df_tab.sort_values(C["roas"], ascending=False),
                                x=C["roas"], y=C["canal"], orientation="h",
                                color=C["canal"], color_discrete_sequence=COLORS, title="ROAS por Canal")
                 fig_r.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
                 st.plotly_chart(fig_r, use_container_width=True)
             if C["cpv"] in df_tab.columns:
-                # Menor CPA no topo (melhor) → ascending=True
-                fig_cpa = px.bar(df_tab.sort_values(C["cpv"], ascending=True),
+                # Menor CPA no topo (melhor) → ascending=False
+                fig_cpa = px.bar(df_tab.sort_values(C["cpv"], ascending=False),
                                  x=C["cpv"], y=C["canal"], orientation="h",
                                  color=C["canal"], color_discrete_sequence=COLORS, title="CPA por Canal (menor = melhor)")
                 fig_cpa.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
                 st.plotly_chart(fig_cpa, use_container_width=True)
         with gc2:
             if C["cpl"] in df_tab.columns:
-                # Menor CPL no topo (melhor) → ascending=True
-                fig_cpl = px.bar(df_tab.sort_values(C["cpl"], ascending=True),
+                # Menor CPL no topo (melhor) → ascending=False
+                fig_cpl = px.bar(df_tab.sort_values(C["cpl"], ascending=False),
                                  x=C["cpl"], y=C["canal"], orientation="h",
                                  color=C["canal"], color_discrete_sequence=COLORS, title="CPL por Canal (menor = melhor)")
                 fig_cpl.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
                 st.plotly_chart(fig_cpl, use_container_width=True)
             if C["conv"] in df_tab.columns:
-                # Maior conversão no topo → ascending=True
-                fig_conv = px.bar(df_tab.sort_values(C["conv"], ascending=True),
+                # Maior conversão no topo → ascending=False
+                fig_conv = px.bar(df_tab.sort_values(C["conv"], ascending=False),
                                   x=C["conv"], y=C["canal"], orientation="h",
                                   color=C["canal"], color_discrete_sequence=COLORS, title="Conversão % por Canal")
                 fig_conv.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
