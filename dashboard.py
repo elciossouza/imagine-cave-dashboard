@@ -140,6 +140,20 @@ def load_sheet(sheet_name: str) -> pd.DataFrame:
         st.error(f"⚠️ Não foi possível carregar os dados ({sheet_name}).\n\n_Detalhe: {_sanitize_error(e)}_")
         return pd.DataFrame()
 
+@st.cache_data(ttl=300)
+def load_vendas() -> pd.DataFrame:
+    try:
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
+        client = gspread.authorize(creds)
+        sh = client.open_by_key(st.secrets["spreadsheet2"]["id"])
+        ws = sh.get_worksheet(0)
+        data = ws.get_all_records()
+        return pd.DataFrame(data)
+    except Exception as e:
+        _logger.error("Falha ao carregar planilha de vendas: %s", e)
+        st.error(f"⚠️ Não foi possível carregar os dados de vendas.\n\n_Detalhe: {_sanitize_error(e)}_")
+        return pd.DataFrame()
+
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
@@ -221,6 +235,7 @@ with st.spinner("Carregando dados..."):
     df_total    = load_sheet("Resumo_Total")
     df_pago     = load_sheet("Resumo_Midia_Paga")
     df_organico = load_sheet("Resumo_Organico")
+    df_vendas   = load_vendas()
 
 COLS_BASE    = [C["leads"], C["vendas"], C["receita"], C["invest"]]
 COLS_RESUMO  = [C["leads"], C["vendas"], C["receita"], C["invest"],
@@ -298,7 +313,7 @@ df_o_mes  = filt(df_organico, mes_sel)
 # ─────────────────────────────────────────────
 # ABAS
 # ─────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["📊  Visão Geral", "🎯  Análise por Canal", "💡  Pago vs Orgânico"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊  Visão Geral", "🎯  Análise por Canal", "💡  Pago vs Orgânico", "🎟️  Ingressos & Vendas"])
 
 # ════════════════════════════════════════════
 # ABA 1 — VISÃO GERAL
@@ -622,6 +637,173 @@ with tab3:
             trend = "aumentando 📈 — custo crescente" if vals[-1] > vals[-2] else "diminuindo ✅ — eficiência melhorando"
             st.markdown(f'<div class="insight-box">CAC pago está <strong>{trend}</strong>. Último valor: <strong>{fmt_usd(vals[-1])}</strong></div>',
                         unsafe_allow_html=True)
+
+
+# ════════════════════════════════════════════
+# ABA 4 — INGRESSOS & VENDAS
+# ════════════════════════════════════════════
+with tab4:
+    if df_vendas.empty:
+        st.info("Sem dados de vendas disponíveis.")
+    else:
+        CV = {
+            "data":      "Data/hora da compra",
+            "genero":    "Gênero",
+            "valor":     "Valor total pago",
+            "taxas":     "Taxas",
+            "qtd":       "Qtd de ingressos",
+            "tipo":      "Tipo",
+            "tipo_ing":  "Tipo de ingresso",
+            "metodo":    "Método de pagamento",
+            "pais":      "País do comprador",
+            "reembolso": "Valor reembolsado",
+        }
+
+        df_v = df_vendas.copy()
+        for col in [CV["valor"], CV["taxas"], CV["qtd"], CV["reembolso"]]:
+            if col in df_v.columns:
+                df_v[col] = safe_num(df_v[col])
+
+        def parse_data(s):
+            s = str(s).strip()
+            try:
+                return pd.to_datetime(s, utc=True).tz_localize(None)
+            except Exception:
+                pass
+            try:
+                return pd.to_datetime(s, dayfirst=True, errors="coerce")
+            except Exception:
+                return pd.NaT
+
+        if CV["data"] in df_v.columns:
+            df_v["_data_parsed"] = df_v[CV["data"]].apply(parse_data)
+            df_v["_mes"] = df_v["_data_parsed"].dt.to_period("M").astype(str)
+
+        st.markdown('<div class="section-title">🎟️ KPIs de Ingressos</div>', unsafe_allow_html=True)
+        receita_v   = df_v[CV["valor"]].sum()      if CV["valor"]     in df_v.columns else 0
+        taxas_v     = df_v[CV["taxas"]].sum()      if CV["taxas"]     in df_v.columns else 0
+        qtd_v       = df_v[CV["qtd"]].sum()        if CV["qtd"]       in df_v.columns else 0
+        reembolso_v = df_v[CV["reembolso"]].sum()  if CV["reembolso"] in df_v.columns else 0
+        n_compras   = len(df_v)
+        ticket_v    = receita_v / n_compras if n_compras > 0 else 0
+        media_ing   = qtd_v / n_compras if n_compras > 0 else 0
+
+        k1,k2,k3,k4,k5,k6 = st.columns(6)
+        with k1: kpi_card("Receita Total",      fmt_usd(receita_v),   "", "💰")
+        with k2: kpi_card("Ingressos Vendidos", fmt_int(qtd_v),       "", "🎟️")
+        with k3: kpi_card("Ticket Médio",       fmt_usd(ticket_v),    "", "💳")
+        with k4: kpi_card("Média Ing./Compra",  f"{media_ing:.1f}",   "", "👥")
+        with k5: kpi_card("Total em Taxas",     fmt_usd(taxas_v),     "", "📋")
+        with k6: kpi_card("Reembolsos",         fmt_usd(reembolso_v), "", "↩️")
+
+        st.markdown("---")
+        st.markdown('<div class="section-title">👥 Perfil do Comprador</div>', unsafe_allow_html=True)
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            if CV["genero"] in df_v.columns:
+                df_gen = df_v.groupby(CV["genero"])[CV["valor"]].sum().reset_index()
+                df_gen.columns = ["Gênero", "Receita"]
+                fig_gen = px.pie(df_gen, names="Gênero", values="Receita", title="Receita por Gênero",
+                                 color_discrete_sequence=COLORS, hole=0.5)
+                fig_gen.update_traces(textinfo="percent+label")
+                fig_gen.update_layout(**PLOT_LAYOUT, height=320)
+                st.plotly_chart(fig_gen, use_container_width=True)
+
+        with col_b:
+            if CV["tipo"] in df_v.columns:
+                df_tipo = df_v.groupby(CV["tipo"])[CV["qtd"]].sum().reset_index()
+                df_tipo.columns = ["Tipo", "Qtd"]
+                fig_tipo = px.pie(df_tipo, names="Tipo", values="Qtd", title="Ingressos por Tipo",
+                                  color_discrete_sequence=COLORS, hole=0.5)
+                fig_tipo.update_traces(textinfo="percent+label")
+                fig_tipo.update_layout(**PLOT_LAYOUT, height=320)
+                st.plotly_chart(fig_tipo, use_container_width=True)
+
+        col_c, col_d = st.columns(2)
+        with col_c:
+            if CV["tipo_ing"] in df_v.columns:
+                df_ti = df_v.groupby(CV["tipo_ing"])[CV["qtd"]].sum().reset_index()
+                df_ti.columns = ["Tipo de Ingresso", "Qtd"]
+                df_ti = df_ti.sort_values("Qtd", ascending=False)
+                fig_ti = px.bar(df_ti, x="Qtd", y="Tipo de Ingresso", orientation="h",
+                                color="Tipo de Ingresso", color_discrete_sequence=COLORS,
+                                title="Quantidade por Tipo de Ingresso")
+                fig_ti.update_layout(**PLOT_LAYOUT, showlegend=False, height=320)
+                st.plotly_chart(fig_ti, use_container_width=True)
+
+        with col_d:
+            if CV["metodo"] in df_v.columns:
+                df_met = df_v.groupby(CV["metodo"])[CV["valor"]].sum().reset_index()
+                df_met.columns = ["Método", "Receita"]
+                fig_met = px.pie(df_met, names="Método", values="Receita",
+                                 title="Receita por Método de Pagamento",
+                                 color_discrete_sequence=COLORS, hole=0.5)
+                fig_met.update_traces(textinfo="percent+label")
+                fig_met.update_layout(**PLOT_LAYOUT, height=320)
+                st.plotly_chart(fig_met, use_container_width=True)
+
+        st.markdown('<div class="section-title">🌍 Origem dos Compradores</div>', unsafe_allow_html=True)
+        col_e, col_f = st.columns(2)
+        with col_e:
+            if CV["pais"] in df_v.columns:
+                df_pais = df_v.groupby(CV["pais"])[CV["qtd"]].sum().reset_index()
+                df_pais.columns = ["País", "Qtd"]
+                df_pais = df_pais.sort_values("Qtd", ascending=False)
+                fig_pais = px.bar(df_pais, x="Qtd", y="País", orientation="h",
+                                  color="País", color_discrete_sequence=COLORS,
+                                  title="Ingressos por País")
+                fig_pais.update_layout(**PLOT_LAYOUT, showlegend=False, height=360)
+                st.plotly_chart(fig_pais, use_container_width=True)
+
+        with col_f:
+            if CV["pais"] in df_v.columns:
+                df_pais_r = df_v.groupby(CV["pais"])[CV["valor"]].sum().reset_index()
+                df_pais_r.columns = ["País", "Receita"]
+                fig_pais_r = px.pie(df_pais_r, names="País", values="Receita",
+                                    title="Participação de Receita por País",
+                                    color_discrete_sequence=COLORS, hole=0.5)
+                fig_pais_r.update_traces(textinfo="percent+label")
+                fig_pais_r.update_layout(**PLOT_LAYOUT, height=360)
+                st.plotly_chart(fig_pais_r, use_container_width=True)
+
+        st.markdown('<div class="section-title">📅 Vendas por Mês</div>', unsafe_allow_html=True)
+        if "_mes" in df_v.columns:
+            df_mes_v = df_v.groupby("_mes").agg(
+                Receita=(CV["valor"], "sum"),
+                Ingressos=(CV["qtd"], "sum"),
+            ).reset_index().rename(columns={"_mes": "Mês"})
+            fig_mv = go.Figure()
+            fig_mv.add_trace(go.Bar(x=df_mes_v["Mês"], y=df_mes_v["Receita"],
+                                    name="Receita", marker_color=COLORS[0], opacity=0.9))
+            fig_mv.add_trace(go.Scatter(x=df_mes_v["Mês"], y=df_mes_v["Ingressos"],
+                                        name="Ingressos", mode="lines+markers",
+                                        line=dict(color=COLORS[1], width=2.5),
+                                        marker=dict(size=7), yaxis="y2"))
+            fig_mv.update_layout(**PLOT_LAYOUT, title="Receita e Ingressos por Mês", height=360,
+                                  yaxis2=dict(overlaying="y", side="right",
+                                              gridcolor="rgba(0,0,0,0)", color="#9E7BB5"))
+            st.plotly_chart(fig_mv, use_container_width=True)
+
+        st.markdown('<div class="section-title">🔀 Cruzamento: Marketing × Vendas</div>', unsafe_allow_html=True)
+        invest_total = agg(df_total, C["invest"]) if not df_total.empty else agg(df_pago, C["invest"])
+        leads_total  = agg(df_total, C["leads"])  if not df_total.empty else 0
+        roas_real    = receita_v / invest_total if invest_total > 0 else 0
+        cpv_real     = invest_total / n_compras  if n_compras   > 0 else 0
+        cpl_real     = invest_total / leads_total if leads_total > 0 else 0
+
+        cx1,cx2,cx3,cx4 = st.columns(4)
+        with cx1: kpi_card("Investimento Total", fmt_usd(invest_total), "", "💸")
+        with cx2: kpi_card("ROAS Real",          fmt_x(roas_real),      "", "🚀")
+        with cx3: kpi_card("Custo por Venda",    fmt_usd(cpv_real),     "", "🎯")
+        with cx4: kpi_card("Custo por Lead",     fmt_usd(cpl_real),     "", "📊")
+
+        st.markdown(
+            f'<div class="insight-box">🔀 Para cada <strong>{fmt_usd(1)}</strong> investido, a Imagine Cave gerou ' +
+            f'<strong>{fmt_usd(roas_real)}</strong> em receita (ROAS real). ' +
+            f'Custo por venda: <strong>{fmt_usd(cpv_real)}</strong> · Custo por lead: <strong>{fmt_usd(cpl_real)}</strong>.</div>',
+            unsafe_allow_html=True
+        )
 
 # ─────────────────────────────────────────────
 # FOOTER
