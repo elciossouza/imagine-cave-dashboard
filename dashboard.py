@@ -404,7 +404,7 @@ with tab1:
             return str(v)
         _periodo_sel = _mes_to_period(mes_sel)
         _df_v_mes = df_vendas[df_vendas["_mes"] == _periodo_sel]
-        receita = safe_num(_df_v_mes["Valor total pago"]).sum() if not _df_v_mes.empty else 0
+        receita = _df_v_mes["Valor total pago"].sum() if not _df_v_mes.empty else 0
     else:
         receita = agg(src, C["receita"])
     leads   = agg(src,     C["leads"])
