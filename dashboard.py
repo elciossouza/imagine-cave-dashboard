@@ -442,27 +442,49 @@ with tab1:
 
         with ht1:
             fig = go.Figure()
-            # Receita real vem da planilha de ingressos (spreadsheet2)
+            MESES_L = {"01":"Jan","02":"Fev","03":"Mar","04":"Abr","05":"Mai","06":"Jun",
+                       "07":"Jul","08":"Ago","09":"Set","10":"Out","11":"Nov","12":"Dez"}
+            def _period_label(p):
+                # Converte "2026-02" → "Fev/2026"
+                try:
+                    pt = str(p).split("-")
+                    return f"{MESES_L.get(pt[1], pt[1])}/{pt[0]}"
+                except Exception:
+                    return str(p)
+            def _raw_to_period(v):
+                # Converte "1/26" → "2026-01" para depois virar label
+                try:
+                    parts = str(v).split("/")
+                    if len(parts) == 2:
+                        return f"20{parts[1].strip()}-{parts[0].zfill(2)}"
+                except Exception:
+                    pass
+                return str(v)
+
+            # Receita real vem da planilha de ingressos
             if not df_vendas.empty and "_mes" in df_vendas.columns:
                 df_rec_mes = df_vendas.groupby("_mes")["Valor total pago"].sum().reset_index()
-                df_rec_mes.columns = ["Mes", "Receita"]
-                df_rec_mes = df_rec_mes.sort_values("Mes")
-                MESES_L = {"01":"Jan","02":"Fev","03":"Mar","04":"Abr","05":"Mai","06":"Jun",
-                           "07":"Jul","08":"Ago","09":"Set","10":"Out","11":"Nov","12":"Dez"}
-                def _ml(p):
-                    try:
-                        pt = str(p).split("-")
-                        return f"{MESES_L.get(pt[1], pt[1])}/{pt[0]}"
-                    except Exception:
-                        return str(p)
-                df_rec_mes["Mes_Label"] = df_rec_mes["Mes"].apply(_ml)
-                fig.add_trace(go.Bar(x=df_rec_mes["Mes_Label"], y=df_rec_mes["Receita"],
+                df_rec_mes.columns = ["Periodo", "Receita"]
+                df_rec_mes = df_rec_mes.sort_values("Periodo")
+                df_rec_mes["Label"] = df_rec_mes["Periodo"].apply(_period_label)
+                fig.add_trace(go.Bar(x=df_rec_mes["Label"], y=df_rec_mes["Receita"],
                                      name="Receita USD (Ingressos)", marker_color=COLORS[0], opacity=0.9))
+
+            # Investimento vem da Base_Canais — normaliza para mesmo label
             if C["invest"] in df_total.columns:
-                fig.add_trace(go.Scatter(x=df_total[C["mes"]], y=df_total[C["invest"]],
+                df_inv = df_total[[C["mes"], C["invest"]]].copy()
+                df_inv["Periodo"] = df_inv[C["mes"]].apply(_raw_to_period)
+                df_inv = df_inv.sort_values("Periodo")
+                df_inv["Label"] = df_inv["Periodo"].apply(_period_label)
+                fig.add_trace(go.Scatter(x=df_inv["Label"], y=df_inv[C["invest"]],
                                          name="Investimento USD", mode="lines+markers",
                                          line=dict(color=COLORS[2], width=2.5, dash="dot"), marker=dict(size=6)))
-            fig.update_layout(**PLOT_LAYOUT, title="Receita (Ingressos) vs Investimento (USD)", height=340)
+
+            layout_ht1 = dict(PLOT_LAYOUT)
+            layout_ht1["xaxis"] = dict(type="category", gridcolor="rgba(224,64,251,0.08)")
+            layout_ht1["title"] = "Receita (Ingressos) vs Investimento (USD)"
+            layout_ht1["height"] = 340
+            fig.update_layout(**layout_ht1)
             st.plotly_chart(fig, use_container_width=True)
 
         with ht2:
