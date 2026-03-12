@@ -423,7 +423,9 @@ with tab1:
     else:
         vendas  = agg(src, C["vendas"])
     invest  = agg(src,     C["invest"])
-    roas    = agg(src,     C["roas"])
+    # ROAS real = receita ingressos / investimento
+    _invest_roas = agg(src, C["invest"])
+    roas = receita / _invest_roas if _invest_roas > 0 else 0
     conv    = agg(src,     C["conv"])
     r_prv   = agg(src_prv, C["receita"])
     l_prv   = agg(src_prv, C["leads"])
