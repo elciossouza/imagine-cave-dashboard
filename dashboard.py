@@ -392,7 +392,21 @@ with tab1:
     # Usa Resumo_Total como fonte primária (já consolidado)
     src, src_prv = (df_t_mes, df_t_prv) if not df_t_mes.empty else (df_c_mes, df_c_prv)
 
-    receita = agg(src,     C["receita"])
+    # Receita real: busca da planilha de ingressos filtrada pelo mês selecionado
+    if not df_vendas.empty and "_mes" in df_vendas.columns:
+        def _mes_to_period(v):
+            try:
+                parts = str(v).split("/")
+                if len(parts) == 2:
+                    return f"20{parts[1].strip()}-{parts[0].zfill(2)}"
+            except Exception:
+                pass
+            return str(v)
+        _periodo_sel = _mes_to_period(mes_sel)
+        _df_v_mes = df_vendas[df_vendas["_mes"] == _periodo_sel]
+        receita = safe_num(_df_v_mes["Valor total pago"]).sum() if not _df_v_mes.empty else 0
+    else:
+        receita = agg(src, C["receita"])
     leads   = agg(src,     C["leads"])
     vendas  = agg(src,     C["vendas"])
     invest  = agg(src,     C["invest"])
@@ -465,7 +479,7 @@ with tab1:
             if not df_vendas.empty and "_mes" in df_vendas.columns:
                 df_rec_mes = df_vendas.groupby("_mes")["Valor total pago"].sum().reset_index()
                 df_rec_mes.columns = ["Periodo", "Receita"]
-                df_rec_mes = df_rec_mes.sort_values("Periodo")
+                df_rec_mes = df_rec_mes.sort_values("Periodo")  # ordena como string "2026-01" < "2026-02"
                 df_rec_mes["Label"] = df_rec_mes["Periodo"].apply(_period_label)
                 fig.add_trace(go.Bar(x=df_rec_mes["Label"], y=df_rec_mes["Receita"],
                                      name="Receita USD (Ingressos)", marker_color=COLORS[0], opacity=0.9))
