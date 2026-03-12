@@ -820,9 +820,7 @@ with tab4:
                     pass
             return pd.NaT
 
-        if CV["data"] in df_v.columns:
-            df_v["_data_parsed"] = df_v[CV["data"]].apply(parse_data)
-            df_v["_mes"] = df_v["_data_parsed"].dt.to_period("M").astype(str)
+        # _mes já calculado no pré-processamento global
 
         st.markdown('<div class="section-title">🎟️ KPIs de Ingressos</div>', unsafe_allow_html=True)
         receita_v   = df_v[CV["valor"]].sum()      if CV["valor"]     in df_v.columns else 0
