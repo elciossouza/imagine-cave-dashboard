@@ -786,8 +786,20 @@ with tab4:
             "reembolso": "Valor reembolsado",
         }
 
-        # df_vendas já foi pré-processado globalmente — usa diretamente
-        df_v = df_vendas.copy()
+        # Filtra pelo mês selecionado
+        def _mes_to_period_tab4(v):
+            try:
+                parts = str(v).split("/")
+                if len(parts) == 2:
+                    return f"20{parts[1].strip()}-{parts[0].zfill(2)}"
+            except Exception:
+                pass
+            return str(v)
+        _periodo_tab4 = _mes_to_period_tab4(mes_sel)
+        if not df_vendas.empty and "_mes" in df_vendas.columns:
+            df_v = df_vendas[df_vendas["_mes"] == _periodo_tab4].copy()
+        else:
+            df_v = df_vendas.copy()
 
         def parse_data(s):
             s = str(s).strip()
