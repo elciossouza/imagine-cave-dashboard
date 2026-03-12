@@ -347,6 +347,39 @@ df_t_prv  = prev(df_total,    mes_sel)
 df_p_mes  = filt(df_pago,     mes_sel)
 df_o_mes  = filt(df_organico, mes_sel)
 
+# ── Pré-processa df_vendas (usado em múltiplas abas) ──
+if not df_vendas.empty:
+    def _parse_data(s):
+        s = str(s).strip()
+        if "T" in s and s.endswith("Z"):
+            try:
+                return pd.to_datetime(s, format="%Y-%m-%dT%H:%M:%S.%fZ")
+            except Exception:
+                try:
+                    return pd.to_datetime(s, utc=True).tz_localize(None)
+                except Exception:
+                    pass
+        if "/" in s:
+            try:
+                return pd.to_datetime(s, dayfirst=True, errors="coerce")
+            except Exception:
+                pass
+        return pd.NaT
+
+    CV_DATA = "Data/hora da compra"
+    CV_VALOR = "Valor total pago"
+    CV_TAXAS = "Taxas"
+    CV_QTD = "Qtd de ingressos"
+    CV_REEMBOLSO = "Valor reembolsado"
+
+    for col in [CV_VALOR, CV_TAXAS, CV_QTD, CV_REEMBOLSO]:
+        if col in df_vendas.columns:
+            df_vendas[col] = safe_num(df_vendas[col])
+
+    if CV_DATA in df_vendas.columns:
+        df_vendas["_data_parsed"] = df_vendas[CV_DATA].apply(_parse_data)
+        df_vendas["_mes"] = df_vendas["_data_parsed"].dt.to_period("M").astype(str)
+
 # ─────────────────────────────────────────────
 # ABAS
 # ─────────────────────────────────────────────
