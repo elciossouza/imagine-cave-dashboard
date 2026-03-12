@@ -408,7 +408,20 @@ with tab1:
     else:
         receita = agg(src, C["receita"])
     leads   = agg(src,     C["leads"])
-    vendas  = agg(src,     C["vendas"])
+    # Vendas reais = número de compras na planilha de ingressos
+    if not df_vendas.empty and "_mes" in df_vendas.columns:
+        def _mes_to_period_vg(v):
+            try:
+                parts = str(v).split("/")
+                if len(parts) == 2:
+                    return f"20{parts[1].strip()}-{parts[0].zfill(2)}"
+            except Exception:
+                pass
+            return str(v)
+        _p = _mes_to_period_vg(mes_sel)
+        vendas = len(df_vendas[df_vendas["_mes"] == _p])
+    else:
+        vendas  = agg(src, C["vendas"])
     invest  = agg(src,     C["invest"])
     roas    = agg(src,     C["roas"])
     conv    = agg(src,     C["conv"])
