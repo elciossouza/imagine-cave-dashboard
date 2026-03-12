@@ -800,10 +800,12 @@ with tab4:
                                         name="Ingressos", mode="lines+markers",
                                         line=dict(color=COLORS[1], width=2.5),
                                         marker=dict(size=7), yaxis="y2"))
-            fig_mv.update_layout(**PLOT_LAYOUT, title="Receita e Ingressos por Mês", height=360,
-                                  xaxis=dict(type="category", gridcolor="rgba(224,64,251,0.08)"),
-                                  yaxis2=dict(overlaying="y", side="right",
-                                              gridcolor="rgba(0,0,0,0)", color="#9E7BB5"))
+            layout_mv = dict(PLOT_LAYOUT)
+            layout_mv["xaxis"] = dict(type="category", gridcolor="rgba(224,64,251,0.08)")
+            layout_mv["yaxis2"] = dict(overlaying="y", side="right", gridcolor="rgba(0,0,0,0)", color="#9E7BB5")
+            layout_mv["title"] = "Receita e Ingressos por Mês"
+            layout_mv["height"] = 360
+            fig_mv.update_layout(**layout_mv)
             st.plotly_chart(fig_mv, use_container_width=True)
 
         st.markdown('<div class="section-title">🔀 Cruzamento: Marketing × Vendas</div>', unsafe_allow_html=True)
