@@ -781,14 +781,27 @@ with tab4:
                 Receita=(CV["valor"], "sum"),
                 Ingressos=(CV["qtd"], "sum"),
             ).reset_index().rename(columns={"_mes": "Mês"})
+            # Converte período para nome legível ex: "2026-02" → "Fev/2026"
+            MESES_LABEL = {"01":"Jan","02":"Fev","03":"Mar","04":"Abr","05":"Mai","06":"Jun",
+                           "07":"Jul","08":"Ago","09":"Set","10":"Out","11":"Nov","12":"Dez"}
+            def mes_label(p):
+                try:
+                    partes = str(p).split("-")
+                    return f"{MESES_LABEL.get(partes[1], partes[1])}/{partes[0]}"
+                except Exception:
+                    return str(p)
+            df_mes_v["Mês_Label"] = df_mes_v["Mês"].apply(mes_label)
+            df_mes_v = df_mes_v.sort_values("Mês")
+
             fig_mv = go.Figure()
-            fig_mv.add_trace(go.Bar(x=df_mes_v["Mês"], y=df_mes_v["Receita"],
+            fig_mv.add_trace(go.Bar(x=df_mes_v["Mês_Label"], y=df_mes_v["Receita"],
                                     name="Receita", marker_color=COLORS[0], opacity=0.9))
-            fig_mv.add_trace(go.Scatter(x=df_mes_v["Mês"], y=df_mes_v["Ingressos"],
+            fig_mv.add_trace(go.Scatter(x=df_mes_v["Mês_Label"], y=df_mes_v["Ingressos"],
                                         name="Ingressos", mode="lines+markers",
                                         line=dict(color=COLORS[1], width=2.5),
                                         marker=dict(size=7), yaxis="y2"))
             fig_mv.update_layout(**PLOT_LAYOUT, title="Receita e Ingressos por Mês", height=360,
+                                  xaxis=dict(type="category", gridcolor="rgba(224,64,251,0.08)"),
                                   yaxis2=dict(overlaying="y", side="right",
                                               gridcolor="rgba(0,0,0,0)", color="#9E7BB5"))
             st.plotly_chart(fig_mv, use_container_width=True)
