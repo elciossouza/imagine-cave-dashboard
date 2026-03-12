@@ -494,8 +494,16 @@ with tab1:
                                          name="Investimento USD", mode="lines+markers",
                                          line=dict(color=COLORS[2], width=2.5, dash="dot"), marker=dict(size=6)))
 
+            # Ordena labels cronologicamente
+            all_periods = sorted(set(
+                list(df_rec_mes["Periodo"].tolist() if not df_vendas.empty and "_mes" in df_vendas.columns else []) +
+                list(df_inv["Periodo"].tolist() if C["invest"] in df_total.columns else [])
+            ))
+            sorted_labels = [_period_label(p) for p in all_periods]
             layout_ht1 = dict(PLOT_LAYOUT)
-            layout_ht1["xaxis"] = dict(type="category", gridcolor="rgba(224,64,251,0.08)")
+            layout_ht1["xaxis"] = dict(type="category", categoryorder="array",
+                                       categoryarray=sorted_labels,
+                                       gridcolor="rgba(224,64,251,0.08)")
             layout_ht1["title"] = "Receita (Ingressos) vs Investimento (USD)"
             layout_ht1["height"] = 340
             fig.update_layout(**layout_ht1)
@@ -778,10 +786,8 @@ with tab4:
             "reembolso": "Valor reembolsado",
         }
 
+        # df_vendas já foi pré-processado globalmente — usa diretamente
         df_v = df_vendas.copy()
-        for col in [CV["valor"], CV["taxas"], CV["qtd"], CV["reembolso"]]:
-            if col in df_v.columns:
-                df_v[col] = safe_num(df_v[col])
 
         def parse_data(s):
             s = str(s).strip()
