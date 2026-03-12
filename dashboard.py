@@ -306,7 +306,7 @@ def fmt_mes(val: str) -> str:
             parts = val.split("/")
             if len(parts) == 2:
                 # formato M/AA ex: 1/26
-                mes, ano = parts[0].zfill(2), "20" + parts[1]
+                mes, ano = parts[0].zfill(2), "20" + parts[1].strip()
                 return f"{MESES_PT.get(mes, mes)}/{ano}"
             if len(parts) == 3:
                 # formato DD/MM/YYYY
