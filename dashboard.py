@@ -409,14 +409,27 @@ with tab1:
 
         with ht1:
             fig = go.Figure()
-            if C["receita"] in df_total.columns:
-                fig.add_trace(go.Bar(x=df_total[C["mes"]], y=df_total[C["receita"]],
-                                     name="Receita USD", marker_color=COLORS[0], opacity=0.9))
+            # Receita real vem da planilha de ingressos (spreadsheet2)
+            if not df_vendas.empty and "_mes" in df_vendas.columns:
+                df_rec_mes = df_vendas.groupby("_mes")["Valor total pago"].sum().reset_index()
+                df_rec_mes.columns = ["Mes", "Receita"]
+                df_rec_mes = df_rec_mes.sort_values("Mes")
+                MESES_L = {"01":"Jan","02":"Fev","03":"Mar","04":"Abr","05":"Mai","06":"Jun",
+                           "07":"Jul","08":"Ago","09":"Set","10":"Out","11":"Nov","12":"Dez"}
+                def _ml(p):
+                    try:
+                        pt = str(p).split("-")
+                        return f"{MESES_L.get(pt[1], pt[1])}/{pt[0]}"
+                    except Exception:
+                        return str(p)
+                df_rec_mes["Mes_Label"] = df_rec_mes["Mes"].apply(_ml)
+                fig.add_trace(go.Bar(x=df_rec_mes["Mes_Label"], y=df_rec_mes["Receita"],
+                                     name="Receita USD (Ingressos)", marker_color=COLORS[0], opacity=0.9))
             if C["invest"] in df_total.columns:
                 fig.add_trace(go.Scatter(x=df_total[C["mes"]], y=df_total[C["invest"]],
                                          name="Investimento USD", mode="lines+markers",
                                          line=dict(color=COLORS[2], width=2.5, dash="dot"), marker=dict(size=6)))
-            fig.update_layout(**PLOT_LAYOUT, title="Receita vs Investimento (USD)", height=340)
+            fig.update_layout(**PLOT_LAYOUT, title="Receita (Ingressos) vs Investimento (USD)", height=340)
             st.plotly_chart(fig, use_container_width=True)
 
         with ht2:
