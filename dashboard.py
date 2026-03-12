@@ -250,6 +250,43 @@ if df_canais.empty and df_total.empty:
     st.warning("⚠️ Nenhum dado encontrado. Verifique as credenciais e o ID da planilha.")
     st.stop()
 
+# ── Fallback: calcula resumos a partir de Base_Canais se abas estiverem vazias ──
+if df_total.empty and not df_canais.empty:
+    df_total = df_canais.groupby(C["mes"]).agg({
+        C["leads"]: "sum", C["vendas"]: "sum",
+        C["receita"]: "sum", C["invest"]: "sum",
+    }).reset_index()
+    for d in [df_total]:
+        d[C["cpl"]]    = (d[C["invest"]] / d[C["leads"]].replace(0, float("nan"))).fillna(0)
+        d[C["cpv"]]    = (d[C["invest"]] / d[C["vendas"]].replace(0, float("nan"))).fillna(0)
+        d[C["roas"]]   = (d[C["receita"]] / d[C["invest"]].replace(0, float("nan"))).fillna(0)
+        d[C["conv"]]   = (d[C["vendas"]] / d[C["leads"]].replace(0, float("nan")) * 100).fillna(0)
+        d[C["ticket"]] = (d[C["receita"]] / d[C["vendas"]].replace(0, float("nan"))).fillna(0)
+
+if df_pago.empty and not df_canais.empty:
+    _pago = df_canais[df_canais[C["tipo"]].str.lower().str.contains("pago|paid|paga", na=False)]
+    df_pago = _pago.groupby(C["mes"]).agg({
+        C["leads"]: "sum", C["vendas"]: "sum",
+        C["receita"]: "sum", C["invest"]: "sum",
+    }).reset_index()
+    df_pago[C["cpl"]]    = (df_pago[C["invest"]] / df_pago[C["leads"]].replace(0, float("nan"))).fillna(0)
+    df_pago[C["cpv"]]    = (df_pago[C["invest"]] / df_pago[C["vendas"]].replace(0, float("nan"))).fillna(0)
+    df_pago[C["roas"]]   = (df_pago[C["receita"]] / df_pago[C["invest"]].replace(0, float("nan"))).fillna(0)
+    df_pago[C["conv"]]   = (df_pago[C["vendas"]] / df_pago[C["leads"]].replace(0, float("nan")) * 100).fillna(0)
+    df_pago[C["ticket"]] = (df_pago[C["receita"]] / df_pago[C["vendas"]].replace(0, float("nan"))).fillna(0)
+
+if df_organico.empty and not df_canais.empty:
+    _org = df_canais[~df_canais[C["tipo"]].str.lower().str.contains("pago|paid|paga", na=False)]
+    df_organico = _org.groupby(C["mes"]).agg({
+        C["leads"]: "sum", C["vendas"]: "sum",
+        C["receita"]: "sum", C["invest"]: "sum",
+    }).reset_index()
+    df_organico[C["cpl"]]    = (df_organico[C["invest"]] / df_organico[C["leads"]].replace(0, float("nan"))).fillna(0)
+    df_organico[C["cpv"]]    = (df_organico[C["invest"]] / df_organico[C["vendas"]].replace(0, float("nan"))).fillna(0)
+    df_organico[C["roas"]]   = (df_organico[C["receita"]] / df_organico[C["invest"]].replace(0, float("nan"))).fillna(0)
+    df_organico[C["conv"]]   = (df_organico[C["vendas"]] / df_organico[C["leads"]].replace(0, float("nan")) * 100).fillna(0)
+    df_organico[C["ticket"]] = (df_organico[C["receita"]] / df_organico[C["vendas"]].replace(0, float("nan"))).fillna(0)
+
 # ── Seletor de mês ──
 src_months = df_total if not df_total.empty else df_canais
 all_months_raw = src_months[C["mes"]].dropna().unique().tolist() if C["mes"] in src_months.columns else []
