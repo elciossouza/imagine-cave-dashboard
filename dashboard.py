@@ -666,14 +666,22 @@ with tab4:
 
         def parse_data(s):
             s = str(s).strip()
-            try:
-                return pd.to_datetime(s, utc=True).tz_localize(None)
-            except Exception:
-                pass
-            try:
-                return pd.to_datetime(s, dayfirst=True, errors="coerce")
-            except Exception:
-                return pd.NaT
+            # Formato ISO: 2026-02-20T18:35:46.000Z
+            if "T" in s and s.endswith("Z"):
+                try:
+                    return pd.to_datetime(s, format="%Y-%m-%dT%H:%M:%S.%fZ")
+                except Exception:
+                    try:
+                        return pd.to_datetime(s, utc=True).tz_localize(None)
+                    except Exception:
+                        pass
+            # Formato BR: 11/03/2026 15:53:05 ou 11/03/2026
+            if "/" in s:
+                try:
+                    return pd.to_datetime(s, dayfirst=True, errors="coerce")
+                except Exception:
+                    pass
+            return pd.NaT
 
         if CV["data"] in df_v.columns:
             df_v["_data_parsed"] = df_v[CV["data"]].apply(parse_data)
