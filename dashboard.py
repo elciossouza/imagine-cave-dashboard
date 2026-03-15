@@ -597,14 +597,7 @@ with tab1:
     with c6: kpi_card("ROAS",            fmt_x(roas),      delta_html(roas,    roas_prv),            "🚀")
 
     # Linha de fonte do investimento — corrigida com unsafe_allow_html=True
-    st.markdown(
-        st.markdown(
-        f'<small>Investimento via: {badge(_fonte_api)} &nbsp;|&nbsp; '
-        f'🔵 Google Ads: <strong>{fmt_usd(_invest_google)}</strong> '
-        f'&nbsp;·&nbsp; '
-        f'🔷 Meta Ads: <strong>{fmt_usd(_invest_meta)}</strong></small>',
-        unsafe_allow_html=True
-    )
+    st.markdown(f'<small>Investimento via: {badge(_fonte_api)} &nbsp;|&nbsp; 🔵 Google Ads: <strong>{fmt_usd(_invest_google)}</strong> &nbsp;·&nbsp; 🔷 Meta Ads: <strong>{fmt_usd(_invest_meta)}</strong></small>', unsafe_allow_html=True)
 
     if r_prv > 0:
         var = ((receita - r_prv) / r_prv) * 100
