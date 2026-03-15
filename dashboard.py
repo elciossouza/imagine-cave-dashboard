@@ -11,7 +11,7 @@ import logging
 import datetime
 
 # ─────────────────────────────────────────────
-# SEGURANÇA — Logging seguro (sem dados sensíveis)
+# SEGURANÇA
 # ─────────────────────────────────────────────
 logging.basicConfig(level=logging.ERROR, format="%(asctime)s [%(levelname)s] %(message)s")
 _logger = logging.getLogger(__name__)
@@ -22,8 +22,6 @@ _SENSITIVE_PATTERNS = [
     (r"[\w.+\-]+@[\w\-]+\.[\w.]+", "[EMAIL_OCULTO]"),
     (r"\b\d{10,}\b", "[ID_OCULTO]"),
     (r"act_\d+", "[AD_ACCOUNT_OCULTO]"),
-    (r"ik_live_[^\s\"']+", "[API_KEY_OCULTA]"),
-    (r"whsec_[^\s\"']+", "[WEBHOOK_SECRET_OCULTO]"),
 ]
 
 def _sanitize(text: str) -> str:
@@ -54,7 +52,7 @@ def _log_error(context: str, err: Exception):
     _logger.error("[%s] %s", context, _sanitize(str(err)))
 
 # ─────────────────────────────────────────────
-# HEADERS DE SEGURANÇA
+# CONFIGURAÇÃO DA PÁGINA
 # ─────────────────────────────────────────────
 st.set_page_config(
     page_title="Imagine Cave | Dashboard",
@@ -133,9 +131,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color:
 </style>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# TEMA PLOTLY
-# ─────────────────────────────────────────────
 PLOT_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
     font=dict(family="Inter", color="#9E7BB5"),
@@ -181,31 +176,59 @@ def load_vendas() -> pd.DataFrame:
         return pd.DataFrame()
 
 # ─────────────────────────────────────────────
-# ADS APIs
+# CONVERSÃO DE MÊS → DATAS
+# Suporta: "1/26", "01/26", "3/26", "2/26"
 # ─────────────────────────────────────────────
 def _month_date_range(mes_raw: str):
+    """
+    Converte o formato da planilha (ex: "3/26") para (start_date, end_date).
+    Retorna strings no formato YYYY-MM-DD para uso nas APIs.
+    """
     try:
-        parts = str(mes_raw).strip().split("/")
+        val   = str(mes_raw).strip()
+        parts = val.split("/")
+
         if len(parts) == 2:
-            mes, ano = int(parts[0]), int("20" + parts[1].strip())
+            mes = int(parts[0])           # ex: 3
+            ano = int("20" + parts[1])    # ex: "26" → 2026
         elif len(parts) == 3:
-            mes, ano = int(parts[1]), int(parts[2])
+            # formato DD/MM/YYYY
+            mes = int(parts[1])
+            ano = int(parts[2])
         else:
             return None, None
+
+        if mes < 1 or mes > 12:
+            return None, None
+
         start = datetime.date(ano, mes, 1)
-        end   = (datetime.date(ano + (1 if mes == 12 else 0), 1 if mes == 12 else mes + 1, 1)
-                 - datetime.timedelta(days=1))
+        # Último dia do mês
+        if mes == 12:
+            end = datetime.date(ano + 1, 1, 1) - datetime.timedelta(days=1)
+        else:
+            end = datetime.date(ano, mes + 1, 1) - datetime.timedelta(days=1)
+
         return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
-    except Exception:
+    except Exception as e:
+        _log_error("month_date_range", e)
         return None, None
 
+# ─────────────────────────────────────────────
+# GOOGLE ADS API — Extrai investimento real
+# ─────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_google_ads_spend(mes_raw: str) -> float:
+    """
+    Busca o total gasto no Google Ads para o mês selecionado.
+    Retorna float em USD. Retorna 0.0 em caso de erro.
+    """
     try:
         from google.ads.googleads.client import GoogleAdsClient
+
         start, end = _month_date_range(mes_raw)
         if not start:
             return 0.0
+
         cfg = {
             "developer_token":   st.secrets["google_ads"]["developer_token"],
             "client_id":         st.secrets["google_ads"]["client_id"],
@@ -217,25 +240,38 @@ def load_google_ads_spend(mes_raw: str) -> float:
         client   = GoogleAdsClient.load_from_dict(cfg)
         service  = client.get_service("GoogleAdsService")
         cust_id  = str(st.secrets["google_ads"]["customer_id"]).replace("-", "")
-        query    = f"""
+
+        query = f"""
             SELECT metrics.cost_micros
             FROM campaign
             WHERE segments.date BETWEEN '{start}' AND '{end}'
+            AND campaign.status != 'REMOVED'
         """
         response = service.search(customer_id=cust_id, query=query)
-        return round(sum(r.metrics.cost_micros for r in response) / 1_000_000, 2)
+        total    = sum(row.metrics.cost_micros for row in response) / 1_000_000
+        return round(total, 2)
+
     except Exception as e:
         _log_error("google_ads_spend", e)
         return 0.0
 
+# ─────────────────────────────────────────────
+# META ADS API — Extrai investimento real
+# ─────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_meta_spend(mes_raw: str) -> float:
+    """
+    Busca o total gasto no Meta Ads para o mês selecionado.
+    Retorna float em USD. Retorna 0.0 em caso de erro.
+    """
     try:
         from facebook_business.api import FacebookAdsApi
         from facebook_business.adobjects.adaccount import AdAccount
+
         start, end = _month_date_range(mes_raw)
         if not start:
             return 0.0
+
         FacebookAdsApi.init(access_token=st.secrets["meta_ads"]["access_token"])
         account  = AdAccount(st.secrets["meta_ads"]["ad_account_id"])
         insights = account.get_insights(params={
@@ -243,7 +279,9 @@ def load_meta_spend(mes_raw: str) -> float:
             "level":      "account",
             "fields":     ["spend"],
         })
-        return round(sum(float(i["spend"]) for i in insights if "spend" in i), 2)
+        total = sum(float(i["spend"]) for i in insights if "spend" in i)
+        return round(total, 2)
+
     except Exception as e:
         _log_error("meta_spend", e)
         return 0.0
@@ -314,6 +352,11 @@ def agg(df, col):
     if df.empty or col not in df.columns: return 0
     return df[col].sum()
 
+def badge(ok: bool) -> str:
+    if ok:
+        return '<span class="badge badge-api">API</span>'
+    return '<span class="badge badge-manual">Planilha</span>'
+
 # ─────────────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────────────
@@ -324,7 +367,7 @@ st.markdown("""
 </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# CARREGAMENTO
+# CARREGAMENTO DE DADOS
 # ─────────────────────────────────────────────
 with st.spinner("Carregando dados..."):
     df_canais   = load_sheet("Base_Canais")
@@ -374,21 +417,25 @@ if df_organico.empty and not df_canais.empty:
     df_organico[C["conv"]]   = (df_organico[C["vendas"]] / df_organico[C["leads"]].replace(0, float("nan")) * 100).fillna(0)
     df_organico[C["ticket"]] = (df_organico[C["receita"]] / df_organico[C["vendas"]].replace(0, float("nan"))).fillna(0)
 
-# Seletor de mês
+# ── Seletor de mês ──
 MESES_PT = {"01":"Janeiro","02":"Fevereiro","03":"Março","04":"Abril","05":"Maio","06":"Junho",
             "07":"Julho","08":"Agosto","09":"Setembro","10":"Outubro","11":"Novembro","12":"Dezembro"}
 
-def fmt_mes(val):
+def fmt_mes(val: str) -> str:
+    """Converte '1/26' → 'Janeiro/2026'"""
     val = str(val).strip()
     try:
-        if "/" in val:
-            p = val.split("/")
-            if len(p) == 2: return f"{MESES_PT.get(p[0].zfill(2), p[0])}/20{p[1].strip()}"
-            if len(p) == 3: return f"{MESES_PT.get(p[1].zfill(2), p[1])}/{p[2]}"
-        if "-" in val:
-            p = val.split("-")
-            if len(p) == 3: return f"{MESES_PT.get(p[1].zfill(2), p[1])}/{p[0]}"
-    except Exception: pass
+        parts = val.split("/")
+        if len(parts) == 2:
+            mes = parts[0].zfill(2)   # "1" → "01"
+            ano = "20" + parts[1]     # "26" → "2026"
+            return f"{MESES_PT.get(mes, mes)}/{ano}"
+        if len(parts) == 3:
+            mes = parts[1].zfill(2)
+            ano = parts[2]
+            return f"{MESES_PT.get(mes, mes)}/{ano}"
+    except Exception:
+        pass
     return val
 
 src_months    = df_total if not df_total.empty else df_canais
@@ -405,10 +452,10 @@ with col_f2:
         st.cache_data.clear()
         st.rerun()
 
-mes_sel = month_labels.get(mes_label, mes_label)
+mes_sel = month_labels.get(mes_label, mes_label)   # ex: "3/26"
 st.markdown("---")
 
-# Pré-processa vendas
+# ── Pré-processa vendas ──
 CV_DATA, CV_VALOR, CV_TAXAS = "Data/hora da compra", "Valor total pago", "Taxas"
 CV_QTD,  CV_REEMBOLSO       = "Qtd de ingressos",    "Valor reembolsado"
 
@@ -431,25 +478,37 @@ if not df_vendas.empty:
         df_vendas["_data_parsed"] = df_vendas[CV_DATA].apply(_parse_data)
         df_vendas["_mes"]         = df_vendas["_data_parsed"].dt.to_period("M").astype(str)
 
-# Dados filtrados
+# ── Dados filtrados ──
 df_c_mes = filt(df_canais,   mes_sel); df_c_prv = prev(df_canais,   mes_sel)
 df_t_mes = filt(df_total,    mes_sel); df_t_prv = prev(df_total,    mes_sel)
 df_p_mes = filt(df_pago,     mes_sel)
 df_o_mes = filt(df_organico, mes_sel)
 
-def _mtp(v):
+# Converter mes_sel para período do pandas (ex: "3/26" → "2026-03")
+def _mes_to_period(v: str) -> str:
     try:
-        p = str(v).split("/")
-        if len(p) == 2: return f"20{p[1].strip()}-{p[0].zfill(2)}"
-    except Exception: pass
+        p = str(v).strip().split("/")
+        if len(p) == 2:
+            return f"20{p[1]}-{p[0].zfill(2)}"
+    except Exception:
+        pass
     return str(v)
 
-# Investimento das APIs
-with st.spinner("Consultando APIs de anúncios..."):
-    _invest_google = load_google_ads_spend(mes_sel)
-    _invest_meta   = load_meta_spend(mes_sel)
+_periodo_sel = _mes_to_period(mes_sel)  # ex: "2026-03"
+
+# ─────────────────────────────────────────────
+# EXTRAÇÃO DO INVESTIMENTO DAS APIs
+# Google Ads + Meta Ads → valor real do mês
+# ─────────────────────────────────────────────
+with st.spinner("🔄 Buscando investimento do Google Ads e Meta Ads..."):
+    _invest_google = load_google_ads_spend(mes_sel)   # ex: 1250.00
+    _invest_meta   = load_meta_spend(mes_sel)          # ex: 890.50
     _invest_api    = round(_invest_google + _invest_meta, 2)
-    _fonte_api     = _invest_api > 0
+    _fonte_api     = _invest_api > 0                   # True = veio das APIs
+
+# Fallback: se APIs não retornaram, usa soma da planilha
+_invest_planilha = agg(df_t_mes, C["invest"]) if not df_t_mes.empty else agg(df_c_mes, C["invest"])
+_invest_final    = _invest_api if _fonte_api else _invest_planilha
 
 # ─────────────────────────────────────────────
 # ABAS
@@ -468,16 +527,17 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     src, src_prv = (df_t_mes, df_t_prv) if not df_t_mes.empty else (df_c_mes, df_c_prv)
 
+    # Receita e vendas reais da planilha de ingressos
     if not df_vendas.empty and "_mes" in df_vendas.columns:
-        _df_v   = df_vendas[df_vendas["_mes"] == _mtp(mes_sel)]
-        receita = _df_v[CV_VALOR].sum() if not _df_v.empty else 0
-        vendas  = len(_df_v)
+        _df_v_sel = df_vendas[df_vendas["_mes"] == _periodo_sel]
+        receita   = _df_v_sel[CV_VALOR].sum() if not _df_v_sel.empty else 0
+        vendas    = len(_df_v_sel)
     else:
         receita = agg(src, C["receita"])
         vendas  = agg(src, C["vendas"])
 
     leads   = agg(src, C["leads"])
-    invest  = _invest_api if _fonte_api else agg(src, C["invest"])
+    invest  = _invest_final                              # ← VALOR REAL DAS APIs
     roas    = receita / invest if invest > 0 else 0
     conv    = agg(src, C["conv"])
     r_prv   = agg(src_prv, C["receita"]); l_prv   = agg(src_prv, C["leads"])
@@ -486,18 +546,19 @@ with tab1:
 
     st.markdown('<div class="section-title">🏆 KPIs do Mês</div>', unsafe_allow_html=True)
     c1,c2,c3,c4,c5,c6 = st.columns(6)
-    with c1: kpi_card("Receita Total",   fmt_usd(receita), delta_html(receita,r_prv),                "💰")
-    with c2: kpi_card("Leads Gerados",   fmt_int(leads),   delta_html(leads,  l_prv),                "🎯")
-    with c3: kpi_card("Vendas Fechadas", fmt_int(vendas),  delta_html(vendas, v_prv),                "🤝")
-    with c4: kpi_card("Conversão",       fmt_pct(conv),    delta_html(conv,   conv_prv),             "📈")
-    with c5: kpi_card("Investimento",    fmt_usd(invest),  delta_html(invest, i_prv, inverse=True),  "💸")
-    with c6: kpi_card("ROAS",            fmt_x(roas),      delta_html(roas,   roas_prv),             "🚀")
+    with c1: kpi_card("Receita Total",   fmt_usd(receita), delta_html(receita, r_prv),               "💰")
+    with c2: kpi_card("Leads Gerados",   fmt_int(leads),   delta_html(leads,   l_prv),               "🎯")
+    with c3: kpi_card("Vendas Fechadas", fmt_int(vendas),  delta_html(vendas,  v_prv),               "🤝")
+    with c4: kpi_card("Conversão",       fmt_pct(conv),    delta_html(conv,    conv_prv),            "📈")
+    with c5: kpi_card("Investimento",    fmt_usd(invest),  delta_html(invest,  i_prv, inverse=True), "💸")
+    with c6: kpi_card("ROAS",            fmt_x(roas),      delta_html(roas,    roas_prv),            "🚀")
 
-    _badge = '<span class="badge badge-api">API</span>' if _fonte_api else '<span class="badge badge-manual">Planilha</span>'
+    # Linha de fonte do investimento — corrigida com unsafe_allow_html=True
     st.markdown(
-        f"Investimento via: {_badge} &nbsp;|&nbsp; "
-        f"Google Ads: <strong>{fmt_usd(_invest_google)}</strong> &nbsp;·&nbsp; "
-        f"Meta Ads: <strong>{fmt_usd(_invest_meta)}</strong>",
+        f"<small>Investimento via: {badge(_fonte_api)} &nbsp;|&nbsp; "
+        f"🔵 Google Ads: <strong>{fmt_usd(_invest_google)}</strong> "
+        f"&nbsp;·&nbsp; "
+        f"🔷 Meta Ads: <strong>{fmt_usd(_invest_meta)}</strong></small>",
         unsafe_allow_html=True
     )
 
@@ -513,7 +574,8 @@ with tab1:
     if r_prv > 0:
         diff = ((receita - r_prv) / r_prv) * 100
         txt += f" ({'+' if diff>=0 else ''}{diff:.1f}% vs anterior)"
-    if canal_top: txt += f". Canal líder: <strong>{canal_top}</strong>."
+    if canal_top:
+        txt += f". Canal líder: <strong>{canal_top}</strong>."
     st.markdown(f'<div class="insight-box">💡 {txt}</div>', unsafe_allow_html=True)
 
     if not df_total.empty and C["mes"] in df_total.columns:
@@ -527,8 +589,8 @@ with tab1:
             except Exception: return str(p)
         def _r2p(v):
             try:
-                p = str(v).split("/")
-                if len(p) == 2: return f"20{p[1].strip()}-{p[0].zfill(2)}"
+                p = str(v).strip().split("/")
+                if len(p) == 2: return f"20{p[1]}-{p[0].zfill(2)}"
             except Exception: pass
             return str(v)
 
@@ -549,11 +611,11 @@ with tab1:
                 fig.add_trace(go.Scatter(x=df_inv["Label"], y=df_inv[C["invest"]],
                                          name="Investimento USD", mode="lines+markers",
                                          line=dict(color=COLORS[2], width=2.5, dash="dot"), marker=dict(size=6)))
-            lyt = dict(PLOT_LAYOUT)
             all_p = sorted(set(
                 list(df_rec["Periodo"].tolist() if not df_vendas.empty and "_mes" in df_vendas.columns else []) +
-                list(df_inv["Periodo"].tolist() if C["invest"] in df_total.columns else [])
+                list(df_inv["Periodo"].tolist()  if C["invest"] in df_total.columns else [])
             ))
+            lyt = dict(PLOT_LAYOUT)
             lyt["xaxis"]  = dict(type="category", categoryorder="array",
                                  categoryarray=[_pl(p) for p in all_p],
                                  gridcolor="rgba(224,64,251,0.08)")
@@ -605,37 +667,54 @@ with tab1:
 
 
 # ════════════════════════════════════════════
-# ABA 2 — INVESTIMENTO ADS
+# ABA 2 — 💸 INVESTIMENTO ADS
 # ════════════════════════════════════════════
 with tab2:
     st.markdown('<div class="section-title">💸 Investimento em Anúncios</div>', unsafe_allow_html=True)
 
-    bg = lambda ok: '<span class="badge badge-api">API</span>' if ok else '<span class="badge badge-manual">Sem dados</span>'
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown(f'<div class="ads-invest-card ads-invest-google"><div class="ads-platform-label">🔵 Google Ads {bg(_invest_google>0)}</div><div class="ads-platform-value">{fmt_usd(_invest_google)}</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="ads-invest-card ads-invest-google">'
+            f'<div class="ads-platform-label">🔵 Google Ads {badge(_invest_google > 0)}</div>'
+            f'<div class="ads-platform-value">{fmt_usd(_invest_google)}</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
     with c2:
-        st.markdown(f'<div class="ads-invest-card ads-invest-meta"><div class="ads-platform-label">🔷 Meta Ads {bg(_invest_meta>0)}</div><div class="ads-platform-value">{fmt_usd(_invest_meta)}</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="ads-invest-card ads-invest-meta">'
+            f'<div class="ads-platform-label">🔷 Meta Ads {badge(_invest_meta > 0)}</div>'
+            f'<div class="ads-platform-value">{fmt_usd(_invest_meta)}</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
     with c3:
-        _inv_t2 = _invest_api if _fonte_api else agg(df_t_mes, C["invest"])
-        st.markdown(f'<div class="ads-invest-card ads-invest-total"><div class="ads-platform-label">📊 Total Investido {bg(_fonte_api)}</div><div class="ads-platform-value">{fmt_usd(_inv_t2)}</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="ads-invest-card ads-invest-total">'
+            f'<div class="ads-platform-label">📊 Total Investido {badge(_fonte_api)}</div>'
+            f'<div class="ads-platform-value">{fmt_usd(_invest_final)}</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
 
+    # Métricas de eficiência calculadas com investimento real
     if not df_vendas.empty and "_mes" in df_vendas.columns:
-        _rec_m = df_vendas[df_vendas["_mes"] == _mtp(mes_sel)][CV_VALOR].sum()
+        _rec_m = df_vendas[df_vendas["_mes"] == _periodo_sel][CV_VALOR].sum()
     else:
         _rec_m = agg(df_t_mes, C["receita"])
 
-    _inv_t   = _invest_api if _fonte_api else agg(df_t_mes, C["invest"])
-    _roas_r  = _rec_m / _inv_t if _inv_t > 0 else 0
     _leads_m = agg(df_t_mes, C["leads"])
-    _cpl_r   = _inv_t / _leads_m if _leads_m > 0 else 0
+    _roas_r  = _rec_m        / _invest_final if _invest_final > 0 else 0
+    _cpl_r   = _invest_final / _leads_m      if _leads_m      > 0 else 0
+    _ret_liq = _rec_m        - _invest_final
 
     st.markdown('<div class="section-title">📈 Métricas de Eficiência</div>', unsafe_allow_html=True)
     m1,m2,m3,m4 = st.columns(4)
-    with m1: kpi_card("ROAS Real",         fmt_x(_roas_r),            "", "🚀")
-    with m2: kpi_card("Receita no Mês",    fmt_usd(_rec_m),           "", "💰")
-    with m3: kpi_card("Custo por Lead",    fmt_usd(_cpl_r),           "", "🎯")
-    with m4: kpi_card("Retorno Líquido",   fmt_usd(_rec_m - _inv_t),  "", "📊")
+    with m1: kpi_card("ROAS Real",        fmt_x(_roas_r),   "", "🚀")
+    with m2: kpi_card("Receita no Mês",   fmt_usd(_rec_m),  "", "💰")
+    with m3: kpi_card("Custo por Lead",   fmt_usd(_cpl_r),  "", "🎯")
+    with m4: kpi_card("Retorno Líquido",  fmt_usd(_ret_liq),"", "📊")
 
     if _invest_google > 0 or _invest_meta > 0:
         st.markdown('<div class="section-title">🥧 Distribuição do Investimento</div>', unsafe_allow_html=True)
@@ -645,7 +724,8 @@ with tab2:
                 values=[_invest_google, _invest_meta],
                 names=["Google Ads", "Meta Ads"],
                 title="Google Ads vs Meta Ads",
-                color_discrete_sequence=["#4285F4", "#0866FF"], hole=0.55
+                color_discrete_sequence=["#4285F4", "#0866FF"],
+                hole=0.55
             )
             fig_dist.update_traces(textinfo="percent+label")
             fig_dist.update_layout(**PLOT_LAYOUT, height=320)
@@ -653,16 +733,19 @@ with tab2:
         with d2:
             _pg = (_invest_google / _invest_api * 100) if _invest_api > 0 else 0
             _pm = (_invest_meta   / _invest_api * 100) if _invest_api > 0 else 0
-            st.markdown(f"""
-            <div class="insight-box">
-            💡 Neste mês:<br><br>
-            🔵 <strong>Google Ads</strong>: <strong>{_pg:.1f}%</strong> do total ({fmt_usd(_invest_google)})<br>
-            🔷 <strong>Meta Ads</strong>: <strong>{_pm:.1f}%</strong> do total ({fmt_usd(_invest_meta)})<br><br>
-            Para cada <strong>{fmt_usd(1)}</strong> investido → <strong>{fmt_usd(_roas_r)}</strong> em receita (ROAS Real).
-            </div>""", unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="insight-box">'
+                f'💡 Neste mês:<br><br>'
+                f'🔵 <strong>Google Ads</strong>: <strong>{_pg:.1f}%</strong> do total ({fmt_usd(_invest_google)})<br>'
+                f'🔷 <strong>Meta Ads</strong>: <strong>{_pm:.1f}%</strong> do total ({fmt_usd(_invest_meta)})<br><br>'
+                f'Para cada <strong>{fmt_usd(1)}</strong> investido → '
+                f'<strong>{fmt_usd(_roas_r)}</strong> em receita de ingressos (ROAS Real).'
+                f'</div>',
+                unsafe_allow_html=True
+            )
 
     if not _fonte_api:
-        st.warning("⚠️ APIs sem dados para este período. Usando valores da planilha.")
+        st.warning("⚠️ APIs sem dados para este período. Usando valores da planilha como fallback.")
 
 
 # ════════════════════════════════════════════
@@ -673,7 +756,10 @@ with tab3:
         st.info("Sem dados de canais para o período selecionado.")
     else:
         st.markdown('<div class="section-title">📋 Tabela Estratégica por Canal</div>', unsafe_allow_html=True)
-        df_tab = calc_derived(df_c_mes.groupby(C["canal"]).agg({c:"sum" for c in COLS_BASE if c in df_c_mes.columns}).reset_index())
+        df_tab = calc_derived(df_c_mes.groupby(C["canal"]).agg(
+            {c:"sum" for c in COLS_BASE if c in df_c_mes.columns}
+        ).reset_index())
+
         col_map = {
             C["canal"]:"Canal", C["leads"]:"Leads", C["vendas"]:"Vendas",
             C["conv"]:"Conversão %", C["receita"]:"Receita (USD)", C["invest"]:"Investimento (USD)",
@@ -690,7 +776,7 @@ with tab3:
         if C["roas"] in df_tab.columns and df_tab[C["roas"]].sum() > 0:
             ins.append(f"🏆 Melhor ROAS: <strong>{df_tab.loc[df_tab[C['roas']].idxmax(), C['canal']]}</strong>")
         if C["cpl"]  in df_tab.columns and df_tab[C["cpl"]].sum()  > 0:
-            ins.append(f"💰 Menor CPL: <strong>{df_tab.loc[df_tab[C['cpl']].idxmin(),  C['canal']]}</strong>")
+            ins.append(f"💰 Menor CPL: <strong>{df_tab.loc[df_tab[C['cpl']].idxmin(), C['canal']]}</strong>")
         if C["conv"] in df_tab.columns and df_tab[C["conv"]].sum() > 0:
             ins.append(f"📈 Maior Conversão: <strong>{df_tab.loc[df_tab[C['conv']].idxmax(), C['canal']]}</strong>")
         if ins:
@@ -732,7 +818,6 @@ with tab3:
 with tab4:
     rec_p  = agg(df_p_mes, C["receita"]); rec_o  = agg(df_o_mes, C["receita"])
     lead_p = agg(df_p_mes, C["leads"]);   lead_o = agg(df_o_mes, C["leads"])
-    inv_p  = _invest_api if _fonte_api else agg(df_p_mes, C["invest"])
     rec_tot  = rec_p + rec_o; lead_tot = lead_p + lead_o
     pct_rp = rec_p  / rec_tot  * 100 if rec_tot  else 0
     pct_ro = rec_o  / rec_tot  * 100 if rec_tot  else 0
@@ -798,12 +883,12 @@ with tab5:
         st.info("Sem dados de vendas disponíveis.")
     else:
         CV = {
-            "data":"Data/hora da compra", "genero":"Gênero", "valor":"Valor total pago",
-            "taxas":"Taxas", "qtd":"Qtd de ingressos", "tipo":"Tipo",
-            "tipo_ing":"Tipo de ingresso", "metodo":"Método de pagamento",
-            "pais":"País do comprador", "reembolso":"Valor reembolsado",
+            "data":"Data/hora da compra","genero":"Gênero","valor":"Valor total pago",
+            "taxas":"Taxas","qtd":"Qtd de ingressos","tipo":"Tipo",
+            "tipo_ing":"Tipo de ingresso","metodo":"Método de pagamento",
+            "pais":"País do comprador","reembolso":"Valor reembolsado",
         }
-        df_v = df_vendas[df_vendas["_mes"] == _mtp(mes_sel)].copy() if "_mes" in df_vendas.columns else df_vendas.copy()
+        df_v = df_vendas[df_vendas["_mes"] == _periodo_sel].copy() if "_mes" in df_vendas.columns else df_vendas.copy()
 
         st.markdown('<div class="section-title">🎟️ KPIs de Ingressos</div>', unsafe_allow_html=True)
         receita_v   = df_v[CV["valor"]].sum()     if CV["valor"]     in df_v.columns else 0
@@ -916,17 +1001,16 @@ with tab5:
             st.plotly_chart(fig_mv, use_container_width=True)
 
         st.markdown('<div class="section-title">🔀 Cruzamento: Marketing × Vendas</div>', unsafe_allow_html=True)
-        _inv_cx  = _invest_api if _fonte_api else agg(df_t_mes, C["invest"])
         _leads_cx = agg(df_t_mes, C["leads"])
-        _roas_cx  = receita_v / _inv_cx  if _inv_cx   > 0 else 0
-        _cpv_cx   = _inv_cx   / n_compras if n_compras > 0 else 0
-        _cpl_cx   = _inv_cx   / _leads_cx if _leads_cx > 0 else 0
+        _roas_cx  = receita_v    / _invest_final if _invest_final > 0 else 0
+        _cpv_cx   = _invest_final / n_compras    if n_compras     > 0 else 0
+        _cpl_cx   = _invest_final / _leads_cx    if _leads_cx     > 0 else 0
 
         cx1,cx2,cx3,cx4 = st.columns(4)
-        with cx1: kpi_card("Investimento Total", fmt_usd(_inv_cx),  "", "💸")
-        with cx2: kpi_card("ROAS Real",          fmt_x(_roas_cx),   "", "🚀")
-        with cx3: kpi_card("Custo por Venda",    fmt_usd(_cpv_cx),  "", "🎯")
-        with cx4: kpi_card("Custo por Lead",     fmt_usd(_cpl_cx),  "", "📊")
+        with cx1: kpi_card("Investimento Total", fmt_usd(_invest_final), "", "💸")
+        with cx2: kpi_card("ROAS Real",          fmt_x(_roas_cx),        "", "🚀")
+        with cx3: kpi_card("Custo por Venda",    fmt_usd(_cpv_cx),       "", "🎯")
+        with cx4: kpi_card("Custo por Lead",     fmt_usd(_cpl_cx),       "", "📊")
 
         st.markdown(
             f'<div class="insight-box">🔀 Para cada <strong>{fmt_usd(1)}</strong> investido, a Imagine Cave gerou '
