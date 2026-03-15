@@ -8,32 +8,53 @@ from google.oauth2.service_account import Credentials
 import numpy as np
 import re
 import logging
+import datetime
 
 # ─────────────────────────────────────────────
-# SEGURANÇA — logging server-side apenas
+# SEGURANÇA — Logging seguro (sem dados sensíveis)
 # ─────────────────────────────────────────────
 logging.basicConfig(level=logging.ERROR, format="%(asctime)s [%(levelname)s] %(message)s")
 _logger = logging.getLogger(__name__)
 
-def _sanitize_error(err: Exception) -> str:
-    raw = str(err)
+_SENSITIVE_PATTERNS = [
+    (r"https?://[^\s\"']+", "[URL_OCULTA]"),
+    (r"[a-zA-Z0-9_\-]{30,}", "[TOKEN_OCULTO]"),
+    (r"[\w.+\-]+@[\w\-]+\.[\w.]+", "[EMAIL_OCULTO]"),
+    (r"\b\d{10,}\b", "[ID_OCULTO]"),
+    (r"act_\d+", "[AD_ACCOUNT_OCULTO]"),
+    (r"ik_live_[^\s\"']+", "[API_KEY_OCULTA]"),
+    (r"whsec_[^\s\"']+", "[WEBHOOK_SECRET_OCULTO]"),
+]
+
+def _sanitize(text: str) -> str:
+    raw = str(text)
     try:
-        _sid = st.secrets.get("spreadsheet", {}).get("id", "")
-        if _sid:
-            raw = raw.replace(_sid, "***")
+        for key in ["spreadsheet", "spreadsheet2"]:
+            sid = st.secrets.get(key, {}).get("id", "")
+            if sid and len(sid) > 5:
+                raw = raw.replace(sid, "[SHEET_ID_OCULTO]")
     except Exception:
         pass
-    patterns = [
-        (r"https?://[^\s]+", "[URL ocultada]"),
-        (r"[a-zA-Z0-9_-]{20,}", "***"),
-        (r"[\w.+-]+@[\w-]+\.[\w.]+", "[email ocultado]"),
-    ]
-    for pattern, replacement in patterns:
+    try:
+        for section in ["google_ads", "meta_ads", "gcp_service_account"]:
+            section_data = st.secrets.get(section, {})
+            if hasattr(section_data, 'to_dict'):
+                section_data = section_data.to_dict()
+            if isinstance(section_data, dict):
+                for v in section_data.values():
+                    if isinstance(v, str) and len(v) > 8:
+                        raw = raw.replace(v, "[SECRET_OCULTO]")
+    except Exception:
+        pass
+    for pattern, replacement in _SENSITIVE_PATTERNS:
         raw = re.sub(pattern, replacement, raw)
     return raw
 
+def _log_error(context: str, err: Exception):
+    _logger.error("[%s] %s", context, _sanitize(str(err)))
+
 # ─────────────────────────────────────────────
-# CONFIGURAÇÃO DA PÁGINA
+# HEADERS DE SEGURANÇA
 # ─────────────────────────────────────────────
 st.set_page_config(
     page_title="Imagine Cave | Dashboard",
@@ -45,10 +66,12 @@ st.set_page_config(
 st.markdown("""
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="X-Frame-Options" content="DENY">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
+<meta http-equiv="Permissions-Policy" content="geolocation=(), microphone=(), camera=()">
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# MAPEAMENTO DE COLUNAS (nomes exatos da planilha)
+# MAPEAMENTO DE COLUNAS
 # ─────────────────────────────────────────────
 C = {
     "mes":     "Mes",
@@ -72,17 +95,12 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500&display=swap');
 :root {
-    --primary: #E040FB;
-    --primary-dark: #AB00D6;
-    --accent: #FF4081;
-    --accent2: #7C4DFF;
-    --bg-dark: #0A0010;
-    --bg-card: #120020;
-    --text-main: #F3E5F5;
-    --text-muted: #9E7BB5;
+    --primary: #E040FB; --primary-dark: #AB00D6;
+    --accent: #FF4081;  --accent2: #7C4DFF;
+    --bg-dark: #0A0010; --bg-card: #120020;
+    --text-main: #F3E5F5; --text-muted: #9E7BB5;
     --border: rgba(224,64,251,0.18);
-    --red: #FF4081;
-    --green: #69FF47;
+    --red: #FF4081; --green: #69FF47;
 }
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color: var(--bg-dark); color: var(--text-main); }
 .stApp { background: radial-gradient(ellipse at top, #1a0030 0%, #0A0010 50%, #000510 100%); }
@@ -103,6 +121,15 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color:
 .stTabs [data-baseweb="tab-list"] { background: var(--bg-card); border-radius: 12px; padding: 4px; gap: 4px; border: 1px solid var(--border); }
 .stTabs [data-baseweb="tab"] { font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 0.9rem; color: var(--text-muted); border-radius: 8px; padding: 0.5rem 1.2rem; letter-spacing: 0.5px; }
 .stTabs [aria-selected="true"] { background: linear-gradient(135deg, #E040FB, #7C4DFF) !important; color: white !important; }
+.ads-invest-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem 1.4rem; margin-bottom: 0.8rem; }
+.ads-invest-google { border-left: 4px solid #4285F4; }
+.ads-invest-meta   { border-left: 4px solid #0866FF; }
+.ads-invest-total  { border-left: 4px solid var(--primary); }
+.ads-platform-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px; }
+.ads-platform-value { font-family: 'Rajdhani', sans-serif; font-size: 1.6rem; font-weight: 700; color: var(--text-main); }
+.badge { display: inline-block; font-size: 0.6rem; padding: 2px 8px; border-radius: 20px; font-weight: 700; letter-spacing: 0.5px; margin-left: 6px; vertical-align: middle; }
+.badge-api    { background: rgba(105,255,71,0.12); color: #69FF47; border: 1px solid rgba(105,255,71,0.3); }
+.badge-manual { background: rgba(255,209,71,0.12); color: #FFD147; border: 1px solid rgba(255,209,71,0.3); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -130,29 +157,96 @@ SCOPES = [
 @st.cache_data(ttl=300)
 def load_sheet(sheet_name: str) -> pd.DataFrame:
     try:
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
+        creds  = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
         client = gspread.authorize(creds)
-        sh = client.open_by_key(st.secrets["spreadsheet"]["id"])
-        data = sh.worksheet(sheet_name).get_all_records()
+        sh     = client.open_by_key(st.secrets["spreadsheet"]["id"])
+        data   = sh.worksheet(sheet_name).get_all_records()
         return pd.DataFrame(data)
     except Exception as e:
-        _logger.error("Falha ao carregar '%s': %s", sheet_name, e)
-        st.error(f"⚠️ Não foi possível carregar os dados ({sheet_name}).\n\n_Detalhe: {_sanitize_error(e)}_")
+        _log_error(f"load_sheet:{sheet_name}", e)
+        st.error(f"⚠️ Não foi possível carregar os dados ({sheet_name}).")
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def load_vendas() -> pd.DataFrame:
     try:
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
+        creds  = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
         client = gspread.authorize(creds)
-        sh = client.open_by_key(st.secrets["spreadsheet2"]["id"])
-        ws = sh.get_worksheet(0)
-        data = ws.get_all_records()
+        sh     = client.open_by_key(st.secrets["spreadsheet2"]["id"])
+        data   = sh.get_worksheet(0).get_all_records()
         return pd.DataFrame(data)
     except Exception as e:
-        _logger.error("Falha ao carregar planilha de vendas: %s", e)
-        st.error(f"⚠️ Não foi possível carregar os dados de vendas.\n\n_Detalhe: {_sanitize_error(e)}_")
+        _log_error("load_vendas", e)
+        st.error("⚠️ Não foi possível carregar os dados de vendas.")
         return pd.DataFrame()
+
+# ─────────────────────────────────────────────
+# ADS APIs
+# ─────────────────────────────────────────────
+def _month_date_range(mes_raw: str):
+    try:
+        parts = str(mes_raw).strip().split("/")
+        if len(parts) == 2:
+            mes, ano = int(parts[0]), int("20" + parts[1].strip())
+        elif len(parts) == 3:
+            mes, ano = int(parts[1]), int(parts[2])
+        else:
+            return None, None
+        start = datetime.date(ano, mes, 1)
+        end   = (datetime.date(ano + (1 if mes == 12 else 0), 1 if mes == 12 else mes + 1, 1)
+                 - datetime.timedelta(days=1))
+        return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+    except Exception:
+        return None, None
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_google_ads_spend(mes_raw: str) -> float:
+    try:
+        from google.ads.googleads.client import GoogleAdsClient
+        start, end = _month_date_range(mes_raw)
+        if not start:
+            return 0.0
+        cfg = {
+            "developer_token":   st.secrets["google_ads"]["developer_token"],
+            "client_id":         st.secrets["google_ads"]["client_id"],
+            "client_secret":     st.secrets["google_ads"]["client_secret"],
+            "refresh_token":     st.secrets["google_ads"]["refresh_token"],
+            "login_customer_id": str(st.secrets["google_ads"]["login_customer_id"]),
+            "use_proto_plus":    True,
+        }
+        client   = GoogleAdsClient.load_from_dict(cfg)
+        service  = client.get_service("GoogleAdsService")
+        cust_id  = str(st.secrets["google_ads"]["customer_id"]).replace("-", "")
+        query    = f"""
+            SELECT metrics.cost_micros
+            FROM campaign
+            WHERE segments.date BETWEEN '{start}' AND '{end}'
+        """
+        response = service.search(customer_id=cust_id, query=query)
+        return round(sum(r.metrics.cost_micros for r in response) / 1_000_000, 2)
+    except Exception as e:
+        _log_error("google_ads_spend", e)
+        return 0.0
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_meta_spend(mes_raw: str) -> float:
+    try:
+        from facebook_business.api import FacebookAdsApi
+        from facebook_business.adobjects.adaccount import AdAccount
+        start, end = _month_date_range(mes_raw)
+        if not start:
+            return 0.0
+        FacebookAdsApi.init(access_token=st.secrets["meta_ads"]["access_token"])
+        account  = AdAccount(st.secrets["meta_ads"]["ad_account_id"])
+        insights = account.get_insights(params={
+            "time_range": {"since": start, "until": end},
+            "level":      "account",
+            "fields":     ["spend"],
+        })
+        return round(sum(float(i["spend"]) for i in insights if "spend" in i), 2)
+    except Exception as e:
+        _log_error("meta_spend", e)
+        return 0.0
 
 # ─────────────────────────────────────────────
 # HELPERS
@@ -172,34 +266,36 @@ def fmt_x(v):   return f"{v:.2f}x"
 def delta_html(cur, prv, inverse=False):
     if prv == 0: return ""
     diff = ((cur - prv) / abs(prv)) * 100
-    up = (diff >= 0) if not inverse else (diff < 0)
-    css = "delta-up" if up else "delta-down"
-    arrow = "▲" if diff >= 0 else "▼"
-    return f'<span class="kpi-delta {css}">{arrow} {abs(diff):.1f}% vs mês anterior</span>'
+    up   = (diff >= 0) if not inverse else (diff < 0)
+    css  = "delta-up" if up else "delta-down"
+    arr  = "▲" if diff >= 0 else "▼"
+    return f'<span class="kpi-delta {css}">{arr} {abs(diff):.1f}% vs mês anterior</span>'
 
 def kpi_card(label, value, delta="", icon=""):
-    st.markdown(f'<div class="kpi-card"><div class="kpi-label">{icon} {label}</div>'
-                f'<div class="kpi-value">{value}</div>{delta}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="kpi-card"><div class="kpi-label">{icon} {label}</div>'
+        f'<div class="kpi-value">{value}</div>{delta}</div>',
+        unsafe_allow_html=True
+    )
 
-def prep(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+def prep(df, cols):
     if df.empty: return df
     for col in cols:
         if col in df.columns:
             df[col] = safe_num(df[col])
     return df
 
-def calc_derived(df: pd.DataFrame) -> pd.DataFrame:
-    """Calcula CPL, CPA, ROAS, Conversão e Ticket a partir das colunas base."""
+def calc_derived(df):
     if df.empty: return df
     leads  = df[C["leads"]].where(df[C["leads"]]  > 0) if C["leads"]  in df.columns else pd.Series(np.nan, index=df.index)
     vendas = df[C["vendas"]].where(df[C["vendas"]] > 0) if C["vendas"] in df.columns else pd.Series(np.nan, index=df.index)
     rec    = df[C["receita"]] if C["receita"] in df.columns else pd.Series(0, index=df.index)
-    inv    = df[C["invest"]].where(df[C["invest"]]  > 0) if C["invest"]  in df.columns else pd.Series(np.nan, index=df.index)
-    df[C["cpl"]]    = (inv    / leads).fillna(0)
-    df[C["cpv"]]    = (inv    / vendas).fillna(0)
-    df[C["roas"]]   = (rec    / inv).fillna(0)
+    inv    = df[C["invest"]].where(df[C["invest"]] > 0)  if C["invest"] in df.columns else pd.Series(np.nan, index=df.index)
+    df[C["cpl"]]    = (inv / leads).fillna(0)
+    df[C["cpv"]]    = (inv / vendas).fillna(0)
+    df[C["roas"]]   = (rec / inv).fillna(0)
     df[C["conv"]]   = (df[C["vendas"]] / leads * 100).fillna(0) if C["vendas"] in df.columns else 0
-    df[C["ticket"]] = (rec    / vendas).fillna(0)
+    df[C["ticket"]] = (rec / vendas).fillna(0)
     return df
 
 def filt(df, month):
@@ -228,7 +324,7 @@ st.markdown("""
 </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# CARREGAMENTO E PRÉ-PROCESSAMENTO
+# CARREGAMENTO
 # ─────────────────────────────────────────────
 with st.spinner("Carregando dados..."):
     df_canais   = load_sheet("Base_Canais")
@@ -237,9 +333,9 @@ with st.spinner("Carregando dados..."):
     df_organico = load_sheet("Resumo_Organico")
     df_vendas   = load_vendas()
 
-COLS_BASE    = [C["leads"], C["vendas"], C["receita"], C["invest"]]
-COLS_RESUMO  = [C["leads"], C["vendas"], C["receita"], C["invest"],
-                C["cpl"], C["cpv"], C["conv"], C["ticket"], C["roas"]]
+COLS_BASE   = [C["leads"], C["vendas"], C["receita"], C["invest"]]
+COLS_RESUMO = [C["leads"], C["vendas"], C["receita"], C["invest"],
+               C["cpl"], C["cpv"], C["conv"], C["ticket"], C["roas"]]
 
 df_canais   = calc_derived(prep(df_canais,   COLS_BASE))
 df_total    = prep(df_total,    COLS_RESUMO)
@@ -247,15 +343,12 @@ df_pago     = prep(df_pago,     COLS_RESUMO)
 df_organico = prep(df_organico, COLS_RESUMO)
 
 if df_canais.empty and df_total.empty:
-    st.warning("⚠️ Nenhum dado encontrado. Verifique as credenciais e o ID da planilha.")
+    st.warning("⚠️ Nenhum dado encontrado.")
     st.stop()
 
-# ── Fallback: calcula resumos a partir de Base_Canais se abas estiverem vazias ──
+# Fallbacks
 if df_total.empty and not df_canais.empty:
-    df_total = df_canais.groupby(C["mes"]).agg({
-        C["leads"]: "sum", C["vendas"]: "sum",
-        C["receita"]: "sum", C["invest"]: "sum",
-    }).reset_index()
+    df_total = df_canais.groupby(C["mes"]).agg({c:"sum" for c in COLS_BASE if c in df_canais.columns}).reset_index()
     for d in [df_total]:
         d[C["cpl"]]    = (d[C["invest"]] / d[C["leads"]].replace(0, float("nan"))).fillna(0)
         d[C["cpv"]]    = (d[C["invest"]] / d[C["vendas"]].replace(0, float("nan"))).fillna(0)
@@ -265,10 +358,7 @@ if df_total.empty and not df_canais.empty:
 
 if df_pago.empty and not df_canais.empty:
     _pago = df_canais[df_canais[C["tipo"]].str.lower().str.contains("pago|paid|paga", na=False)]
-    df_pago = _pago.groupby(C["mes"]).agg({
-        C["leads"]: "sum", C["vendas"]: "sum",
-        C["receita"]: "sum", C["invest"]: "sum",
-    }).reset_index()
+    df_pago = _pago.groupby(C["mes"]).agg({c:"sum" for c in COLS_BASE if c in _pago.columns}).reset_index()
     df_pago[C["cpl"]]    = (df_pago[C["invest"]] / df_pago[C["leads"]].replace(0, float("nan"))).fillna(0)
     df_pago[C["cpv"]]    = (df_pago[C["invest"]] / df_pago[C["vendas"]].replace(0, float("nan"))).fillna(0)
     df_pago[C["roas"]]   = (df_pago[C["receita"]] / df_pago[C["invest"]].replace(0, float("nan"))).fillna(0)
@@ -277,182 +367,145 @@ if df_pago.empty and not df_canais.empty:
 
 if df_organico.empty and not df_canais.empty:
     _org = df_canais[~df_canais[C["tipo"]].str.lower().str.contains("pago|paid|paga", na=False)]
-    df_organico = _org.groupby(C["mes"]).agg({
-        C["leads"]: "sum", C["vendas"]: "sum",
-        C["receita"]: "sum", C["invest"]: "sum",
-    }).reset_index()
+    df_organico = _org.groupby(C["mes"]).agg({c:"sum" for c in COLS_BASE if c in _org.columns}).reset_index()
     df_organico[C["cpl"]]    = (df_organico[C["invest"]] / df_organico[C["leads"]].replace(0, float("nan"))).fillna(0)
     df_organico[C["cpv"]]    = (df_organico[C["invest"]] / df_organico[C["vendas"]].replace(0, float("nan"))).fillna(0)
     df_organico[C["roas"]]   = (df_organico[C["receita"]] / df_organico[C["invest"]].replace(0, float("nan"))).fillna(0)
     df_organico[C["conv"]]   = (df_organico[C["vendas"]] / df_organico[C["leads"]].replace(0, float("nan")) * 100).fillna(0)
     df_organico[C["ticket"]] = (df_organico[C["receita"]] / df_organico[C["vendas"]].replace(0, float("nan"))).fillna(0)
 
-# ── Seletor de mês ──
-src_months = df_total if not df_total.empty else df_canais
-all_months_raw = src_months[C["mes"]].dropna().unique().tolist() if C["mes"] in src_months.columns else []
+# Seletor de mês
+MESES_PT = {"01":"Janeiro","02":"Fevereiro","03":"Março","04":"Abril","05":"Maio","06":"Junho",
+            "07":"Julho","08":"Agosto","09":"Setembro","10":"Outubro","11":"Novembro","12":"Dezembro"}
 
-MESES_PT = {
-    "01": "Janeiro", "02": "Fevereiro", "03": "Março",
-    "04": "Abril",   "05": "Maio",      "06": "Junho",
-    "07": "Julho",   "08": "Agosto",    "09": "Setembro",
-    "10": "Outubro", "11": "Novembro",  "12": "Dezembro",
-}
-
-def fmt_mes(val: str) -> str:
-    """Converte '01/01/2026' ou '2026-01-01' em 'Janeiro/2026'."""
+def fmt_mes(val):
     val = str(val).strip()
     try:
         if "/" in val:
-            parts = val.split("/")
-            if len(parts) == 2:
-                # formato M/AA ex: 1/26
-                mes, ano = parts[0].zfill(2), "20" + parts[1].strip()
-                return f"{MESES_PT.get(mes, mes)}/{ano}"
-            if len(parts) == 3:
-                # formato DD/MM/YYYY
-                mes, ano = parts[1].zfill(2), parts[2]
-                return f"{MESES_PT.get(mes, mes)}/{ano}"
+            p = val.split("/")
+            if len(p) == 2: return f"{MESES_PT.get(p[0].zfill(2), p[0])}/20{p[1].strip()}"
+            if len(p) == 3: return f"{MESES_PT.get(p[1].zfill(2), p[1])}/{p[2]}"
         if "-" in val:
-            parts = val.split("-")
-            if len(parts) == 3:
-                mes, ano = parts[1].zfill(2), parts[0]
-                return f"{MESES_PT.get(mes, mes)}/{ano}"
-    except Exception:
-        pass
+            p = val.split("-")
+            if len(p) == 3: return f"{MESES_PT.get(p[1].zfill(2), p[1])}/{p[0]}"
+    except Exception: pass
     return val
 
-# Dicionário: nome legível → valor raw para filtro
-month_labels = {fmt_mes(m): m for m in all_months_raw}
-month_options = list(month_labels.keys())  # ex: ["Janeiro/2026", "Fevereiro/2026"]
+src_months    = df_total if not df_total.empty else df_canais
+all_months    = src_months[C["mes"]].dropna().unique().tolist() if C["mes"] in src_months.columns else []
+month_labels  = {fmt_mes(m): m for m in all_months}
+month_options = list(month_labels.keys())
 
 col_f1, col_f2 = st.columns([4, 1])
 with col_f1:
     mes_label = st.selectbox("📅 Selecionar Mês", options=month_options,
-                             index=len(month_options) - 1 if month_options else 0)
+                             index=len(month_options)-1 if month_options else 0)
 with col_f2:
     if st.button("🔄 Atualizar", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-# Valor real para filtrar o DataFrame
 mes_sel = month_labels.get(mes_label, mes_label)
-
 st.markdown("---")
 
-# Dados filtrados
-df_c_mes  = filt(df_canais,   mes_sel)
-df_c_prv  = prev(df_canais,   mes_sel)
-df_t_mes  = filt(df_total,    mes_sel)
-df_t_prv  = prev(df_total,    mes_sel)
-df_p_mes  = filt(df_pago,     mes_sel)
-df_o_mes  = filt(df_organico, mes_sel)
+# Pré-processa vendas
+CV_DATA, CV_VALOR, CV_TAXAS = "Data/hora da compra", "Valor total pago", "Taxas"
+CV_QTD,  CV_REEMBOLSO       = "Qtd de ingressos",    "Valor reembolsado"
 
-# ── Pré-processa df_vendas (usado em múltiplas abas) ──
 if not df_vendas.empty:
     def _parse_data(s):
         s = str(s).strip()
         if "T" in s and s.endswith("Z"):
-            try:
-                return pd.to_datetime(s, format="%Y-%m-%dT%H:%M:%S.%fZ")
+            try: return pd.to_datetime(s, format="%Y-%m-%dT%H:%M:%S.%fZ")
             except Exception:
-                try:
-                    return pd.to_datetime(s, utc=True).tz_localize(None)
-                except Exception:
-                    pass
+                try: return pd.to_datetime(s, utc=True).tz_localize(None)
+                except Exception: pass
         if "/" in s:
-            try:
-                return pd.to_datetime(s, dayfirst=True, errors="coerce")
-            except Exception:
-                pass
+            try: return pd.to_datetime(s, dayfirst=True, errors="coerce")
+            except Exception: pass
         return pd.NaT
-
-    CV_DATA = "Data/hora da compra"
-    CV_VALOR = "Valor total pago"
-    CV_TAXAS = "Taxas"
-    CV_QTD = "Qtd de ingressos"
-    CV_REEMBOLSO = "Valor reembolsado"
-
     for col in [CV_VALOR, CV_TAXAS, CV_QTD, CV_REEMBOLSO]:
         if col in df_vendas.columns:
             df_vendas[col] = safe_num(df_vendas[col])
-
     if CV_DATA in df_vendas.columns:
         df_vendas["_data_parsed"] = df_vendas[CV_DATA].apply(_parse_data)
-        df_vendas["_mes"] = df_vendas["_data_parsed"].dt.to_period("M").astype(str)
+        df_vendas["_mes"]         = df_vendas["_data_parsed"].dt.to_period("M").astype(str)
+
+# Dados filtrados
+df_c_mes = filt(df_canais,   mes_sel); df_c_prv = prev(df_canais,   mes_sel)
+df_t_mes = filt(df_total,    mes_sel); df_t_prv = prev(df_total,    mes_sel)
+df_p_mes = filt(df_pago,     mes_sel)
+df_o_mes = filt(df_organico, mes_sel)
+
+def _mtp(v):
+    try:
+        p = str(v).split("/")
+        if len(p) == 2: return f"20{p[1].strip()}-{p[0].zfill(2)}"
+    except Exception: pass
+    return str(v)
+
+# Investimento das APIs
+with st.spinner("Consultando APIs de anúncios..."):
+    _invest_google = load_google_ads_spend(mes_sel)
+    _invest_meta   = load_meta_spend(mes_sel)
+    _invest_api    = round(_invest_google + _invest_meta, 2)
+    _fonte_api     = _invest_api > 0
 
 # ─────────────────────────────────────────────
 # ABAS
 # ─────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs(["📊  Visão Geral", "🎯  Análise por Canal", "💡  Pago vs Orgânico", "🎟️  Ingressos & Vendas"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊  Visão Geral",
+    "💸  Investimento Ads",
+    "🎯  Análise por Canal",
+    "💡  Pago vs Orgânico",
+    "🎟️  Ingressos & Vendas",
+])
 
 # ════════════════════════════════════════════
 # ABA 1 — VISÃO GERAL
 # ════════════════════════════════════════════
 with tab1:
-    # Usa Resumo_Total como fonte primária (já consolidado)
     src, src_prv = (df_t_mes, df_t_prv) if not df_t_mes.empty else (df_c_mes, df_c_prv)
 
-    # Receita real: busca da planilha de ingressos filtrada pelo mês selecionado
     if not df_vendas.empty and "_mes" in df_vendas.columns:
-        def _mes_to_period(v):
-            try:
-                parts = str(v).split("/")
-                if len(parts) == 2:
-                    return f"20{parts[1].strip()}-{parts[0].zfill(2)}"
-            except Exception:
-                pass
-            return str(v)
-        _periodo_sel = _mes_to_period(mes_sel)
-        _df_v_mes = df_vendas[df_vendas["_mes"] == _periodo_sel]
-        receita = _df_v_mes["Valor total pago"].sum() if not _df_v_mes.empty else 0
+        _df_v   = df_vendas[df_vendas["_mes"] == _mtp(mes_sel)]
+        receita = _df_v[CV_VALOR].sum() if not _df_v.empty else 0
+        vendas  = len(_df_v)
     else:
         receita = agg(src, C["receita"])
-    leads   = agg(src,     C["leads"])
-    # Vendas reais = número de compras na planilha de ingressos
-    if not df_vendas.empty and "_mes" in df_vendas.columns:
-        def _mes_to_period_vg(v):
-            try:
-                parts = str(v).split("/")
-                if len(parts) == 2:
-                    return f"20{parts[1].strip()}-{parts[0].zfill(2)}"
-            except Exception:
-                pass
-            return str(v)
-        _p = _mes_to_period_vg(mes_sel)
-        vendas = len(df_vendas[df_vendas["_mes"] == _p])
-    else:
         vendas  = agg(src, C["vendas"])
-    invest  = agg(src,     C["invest"])
-    # ROAS real = receita ingressos / investimento
-    _invest_roas = agg(src, C["invest"])
-    roas = receita / _invest_roas if _invest_roas > 0 else 0
-    conv    = agg(src,     C["conv"])
-    r_prv   = agg(src_prv, C["receita"])
-    l_prv   = agg(src_prv, C["leads"])
-    v_prv   = agg(src_prv, C["vendas"])
-    i_prv   = agg(src_prv, C["invest"])
-    roas_prv= agg(src_prv, C["roas"])
-    conv_prv= agg(src_prv, C["conv"])
 
-    # KPIs
+    leads   = agg(src, C["leads"])
+    invest  = _invest_api if _fonte_api else agg(src, C["invest"])
+    roas    = receita / invest if invest > 0 else 0
+    conv    = agg(src, C["conv"])
+    r_prv   = agg(src_prv, C["receita"]); l_prv   = agg(src_prv, C["leads"])
+    v_prv   = agg(src_prv, C["vendas"]);  i_prv   = agg(src_prv, C["invest"])
+    roas_prv= agg(src_prv, C["roas"]);    conv_prv= agg(src_prv, C["conv"])
+
     st.markdown('<div class="section-title">🏆 KPIs do Mês</div>', unsafe_allow_html=True)
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    with c1: kpi_card("Receita Total",   fmt_usd(receita), delta_html(receita, r_prv),           "💰")
-    with c2: kpi_card("Leads Gerados",   fmt_int(leads),   delta_html(leads,   l_prv),           "🎯")
-    with c3: kpi_card("Vendas Fechadas", fmt_int(vendas),  delta_html(vendas,  v_prv),           "🤝")
-    with c4: kpi_card("Conversão",       fmt_pct(conv),    delta_html(conv,    conv_prv),        "📈")
-    with c5: kpi_card("Investimento",    fmt_usd(invest),  delta_html(invest,  i_prv, inverse=True), "💸")
-    with c6: kpi_card("ROAS",            fmt_x(roas),      delta_html(roas,    roas_prv),        "🚀")
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    with c1: kpi_card("Receita Total",   fmt_usd(receita), delta_html(receita,r_prv),                "💰")
+    with c2: kpi_card("Leads Gerados",   fmt_int(leads),   delta_html(leads,  l_prv),                "🎯")
+    with c3: kpi_card("Vendas Fechadas", fmt_int(vendas),  delta_html(vendas, v_prv),                "🤝")
+    with c4: kpi_card("Conversão",       fmt_pct(conv),    delta_html(conv,   conv_prv),             "📈")
+    with c5: kpi_card("Investimento",    fmt_usd(invest),  delta_html(invest, i_prv, inverse=True),  "💸")
+    with c6: kpi_card("ROAS",            fmt_x(roas),      delta_html(roas,   roas_prv),             "🚀")
 
-    # Cresceu ou caiu
+    _badge = '<span class="badge badge-api">API</span>' if _fonte_api else '<span class="badge badge-manual">Planilha</span>'
+    st.markdown(
+        f"Investimento via: {_badge} &nbsp;|&nbsp; "
+        f"Google Ads: <strong>{fmt_usd(_invest_google)}</strong> &nbsp;·&nbsp; "
+        f"Meta Ads: <strong>{fmt_usd(_invest_meta)}</strong>",
+        unsafe_allow_html=True
+    )
+
     if r_prv > 0:
         var = ((receita - r_prv) / r_prv) * 100
-        if var >= 0:
-            st.success(f"📈 Crescemos **{var:.1f}%** vs mês anterior  ({fmt_usd(r_prv)} → {fmt_usd(receita)})")
-        else:
-            st.error(f"📉 Caímos **{abs(var):.1f}%** vs mês anterior  ({fmt_usd(r_prv)} → {fmt_usd(receita)})")
+        if var >= 0: st.success(f"📈 Crescemos **{var:.1f}%** vs mês anterior ({fmt_usd(r_prv)} → {fmt_usd(receita)})")
+        else:        st.error(  f"📉 Caímos **{abs(var):.1f}%** vs mês anterior ({fmt_usd(r_prv)} → {fmt_usd(receita)})")
 
-    # Insight
     canal_top = ""
     if not df_c_mes.empty and C["canal"] in df_c_mes.columns and C["receita"] in df_c_mes.columns:
         canal_top = df_c_mes.groupby(C["canal"])[C["receita"]].sum().idxmax()
@@ -460,73 +513,58 @@ with tab1:
     if r_prv > 0:
         diff = ((receita - r_prv) / r_prv) * 100
         txt += f" ({'+' if diff>=0 else ''}{diff:.1f}% vs anterior)"
-    if canal_top:
-        txt += f". Canal líder: <strong>{canal_top}</strong>."
+    if canal_top: txt += f". Canal líder: <strong>{canal_top}</strong>."
     st.markdown(f'<div class="insight-box">💡 {txt}</div>', unsafe_allow_html=True)
 
-    # Evolução histórica
     if not df_total.empty and C["mes"] in df_total.columns:
         st.markdown('<div class="section-title">📅 Evolução Histórica</div>', unsafe_allow_html=True)
         ht1, ht2, ht3 = st.tabs(["Receita & Investimento", "Leads & Vendas", "ROAS & Conversão"])
+        MESES_L = {"01":"Jan","02":"Fev","03":"Mar","04":"Abr","05":"Mai","06":"Jun",
+                   "07":"Jul","08":"Ago","09":"Set","10":"Out","11":"Nov","12":"Dez"}
+        def _pl(p):
+            try:
+                pt = str(p).split("-"); return f"{MESES_L.get(pt[1],pt[1])}/{pt[0]}"
+            except Exception: return str(p)
+        def _r2p(v):
+            try:
+                p = str(v).split("/")
+                if len(p) == 2: return f"20{p[1].strip()}-{p[0].zfill(2)}"
+            except Exception: pass
+            return str(v)
 
         with ht1:
             fig = go.Figure()
-            MESES_L = {"01":"Jan","02":"Fev","03":"Mar","04":"Abr","05":"Mai","06":"Jun",
-                       "07":"Jul","08":"Ago","09":"Set","10":"Out","11":"Nov","12":"Dez"}
-            def _period_label(p):
-                # Converte "2026-02" → "Fev/2026"
-                try:
-                    pt = str(p).split("-")
-                    return f"{MESES_L.get(pt[1], pt[1])}/{pt[0]}"
-                except Exception:
-                    return str(p)
-            def _raw_to_period(v):
-                # Converte "1/26" → "2026-01" para depois virar label
-                try:
-                    parts = str(v).split("/")
-                    if len(parts) == 2:
-                        return f"20{parts[1].strip()}-{parts[0].zfill(2)}"
-                except Exception:
-                    pass
-                return str(v)
-
-            # Receita real vem da planilha de ingressos
             if not df_vendas.empty and "_mes" in df_vendas.columns:
-                df_rec_mes = df_vendas.groupby("_mes")["Valor total pago"].sum().reset_index()
-                df_rec_mes.columns = ["Periodo", "Receita"]
-                df_rec_mes = df_rec_mes.sort_values("Periodo")  # ordena como string "2026-01" < "2026-02"
-                df_rec_mes["Label"] = df_rec_mes["Periodo"].apply(_period_label)
-                fig.add_trace(go.Bar(x=df_rec_mes["Label"], y=df_rec_mes["Receita"],
-                                     name="Receita USD (Ingressos)", marker_color=COLORS[0], opacity=0.9))
-
-            # Investimento vem da Base_Canais — normaliza para mesmo label
+                df_rec = df_vendas.groupby("_mes")[CV_VALOR].sum().reset_index()
+                df_rec.columns = ["Periodo","Receita"]
+                df_rec = df_rec.sort_values("Periodo")
+                df_rec["Label"] = df_rec["Periodo"].apply(_pl)
+                fig.add_trace(go.Bar(x=df_rec["Label"], y=df_rec["Receita"],
+                                     name="Receita USD", marker_color=COLORS[0], opacity=0.9))
             if C["invest"] in df_total.columns:
-                df_inv = df_total[[C["mes"], C["invest"]]].copy()
-                df_inv["Periodo"] = df_inv[C["mes"]].apply(_raw_to_period)
+                df_inv = df_total[[C["mes"],C["invest"]]].copy()
+                df_inv["Periodo"] = df_inv[C["mes"]].apply(_r2p)
                 df_inv = df_inv.sort_values("Periodo")
-                df_inv["Label"] = df_inv["Periodo"].apply(_period_label)
+                df_inv["Label"] = df_inv["Periodo"].apply(_pl)
                 fig.add_trace(go.Scatter(x=df_inv["Label"], y=df_inv[C["invest"]],
                                          name="Investimento USD", mode="lines+markers",
                                          line=dict(color=COLORS[2], width=2.5, dash="dot"), marker=dict(size=6)))
-
-            # Ordena labels cronologicamente
-            all_periods = sorted(set(
-                list(df_rec_mes["Periodo"].tolist() if not df_vendas.empty and "_mes" in df_vendas.columns else []) +
+            lyt = dict(PLOT_LAYOUT)
+            all_p = sorted(set(
+                list(df_rec["Periodo"].tolist() if not df_vendas.empty and "_mes" in df_vendas.columns else []) +
                 list(df_inv["Periodo"].tolist() if C["invest"] in df_total.columns else [])
             ))
-            sorted_labels = [_period_label(p) for p in all_periods]
-            layout_ht1 = dict(PLOT_LAYOUT)
-            layout_ht1["xaxis"] = dict(type="category", categoryorder="array",
-                                       categoryarray=sorted_labels,
-                                       gridcolor="rgba(224,64,251,0.08)")
-            layout_ht1["title"] = "Receita (Ingressos) vs Investimento (USD)"
-            layout_ht1["height"] = 340
-            fig.update_layout(**layout_ht1)
+            lyt["xaxis"]  = dict(type="category", categoryorder="array",
+                                 categoryarray=[_pl(p) for p in all_p],
+                                 gridcolor="rgba(224,64,251,0.08)")
+            lyt["title"]  = "Receita vs Investimento (USD)"
+            lyt["height"] = 340
+            fig.update_layout(**lyt)
             st.plotly_chart(fig, use_container_width=True)
 
         with ht2:
             fig2 = go.Figure()
-            if C["leads"] in df_total.columns:
+            if C["leads"]  in df_total.columns:
                 fig2.add_trace(go.Bar(x=df_total[C["mes"]], y=df_total[C["leads"]],
                                       name="Leads", marker_color=COLORS[1], opacity=0.9))
             if C["vendas"] in df_total.columns:
@@ -549,7 +587,6 @@ with tab1:
             fig3.update_layout(**PLOT_LAYOUT, title="ROAS & Conversão mês a mês", height=340)
             st.plotly_chart(fig3, use_container_width=True)
 
-    # Gráficos por canal
     if not df_c_mes.empty and C["canal"] in df_c_mes.columns:
         st.markdown('<div class="section-title">📊 Distribuição por Canal</div>', unsafe_allow_html=True)
         g1, g2 = st.columns(2)
@@ -566,156 +603,158 @@ with tab1:
             fig_l.update_layout(**PLOT_LAYOUT, showlegend=False, height=320)
             st.plotly_chart(fig_l, use_container_width=True)
 
-        if C["tipo"] in df_c_mes.columns:
-            df_tipo = df_c_mes.groupby(C["tipo"])[C["receita"]].sum().reset_index()
-            fig_p = px.pie(df_tipo, names=C["tipo"], values=C["receita"],
-                           color_discrete_sequence=COLORS, title="Receita: Pago vs Orgânico", hole=0.5)
-            fig_p.update_traces(textinfo="percent+label")
-            fig_p.update_layout(**PLOT_LAYOUT, height=320)
-            st.plotly_chart(fig_p, use_container_width=True)
-
 
 # ════════════════════════════════════════════
-# ABA 2 — ANÁLISE POR CANAL
+# ABA 2 — INVESTIMENTO ADS
 # ════════════════════════════════════════════
 with tab2:
+    st.markdown('<div class="section-title">💸 Investimento em Anúncios</div>', unsafe_allow_html=True)
+
+    bg = lambda ok: '<span class="badge badge-api">API</span>' if ok else '<span class="badge badge-manual">Sem dados</span>'
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(f'<div class="ads-invest-card ads-invest-google"><div class="ads-platform-label">🔵 Google Ads {bg(_invest_google>0)}</div><div class="ads-platform-value">{fmt_usd(_invest_google)}</div></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown(f'<div class="ads-invest-card ads-invest-meta"><div class="ads-platform-label">🔷 Meta Ads {bg(_invest_meta>0)}</div><div class="ads-platform-value">{fmt_usd(_invest_meta)}</div></div>', unsafe_allow_html=True)
+    with c3:
+        _inv_t2 = _invest_api if _fonte_api else agg(df_t_mes, C["invest"])
+        st.markdown(f'<div class="ads-invest-card ads-invest-total"><div class="ads-platform-label">📊 Total Investido {bg(_fonte_api)}</div><div class="ads-platform-value">{fmt_usd(_inv_t2)}</div></div>', unsafe_allow_html=True)
+
+    if not df_vendas.empty and "_mes" in df_vendas.columns:
+        _rec_m = df_vendas[df_vendas["_mes"] == _mtp(mes_sel)][CV_VALOR].sum()
+    else:
+        _rec_m = agg(df_t_mes, C["receita"])
+
+    _inv_t   = _invest_api if _fonte_api else agg(df_t_mes, C["invest"])
+    _roas_r  = _rec_m / _inv_t if _inv_t > 0 else 0
+    _leads_m = agg(df_t_mes, C["leads"])
+    _cpl_r   = _inv_t / _leads_m if _leads_m > 0 else 0
+
+    st.markdown('<div class="section-title">📈 Métricas de Eficiência</div>', unsafe_allow_html=True)
+    m1,m2,m3,m4 = st.columns(4)
+    with m1: kpi_card("ROAS Real",         fmt_x(_roas_r),            "", "🚀")
+    with m2: kpi_card("Receita no Mês",    fmt_usd(_rec_m),           "", "💰")
+    with m3: kpi_card("Custo por Lead",    fmt_usd(_cpl_r),           "", "🎯")
+    with m4: kpi_card("Retorno Líquido",   fmt_usd(_rec_m - _inv_t),  "", "📊")
+
+    if _invest_google > 0 or _invest_meta > 0:
+        st.markdown('<div class="section-title">🥧 Distribuição do Investimento</div>', unsafe_allow_html=True)
+        d1, d2 = st.columns(2)
+        with d1:
+            fig_dist = px.pie(
+                values=[_invest_google, _invest_meta],
+                names=["Google Ads", "Meta Ads"],
+                title="Google Ads vs Meta Ads",
+                color_discrete_sequence=["#4285F4", "#0866FF"], hole=0.55
+            )
+            fig_dist.update_traces(textinfo="percent+label")
+            fig_dist.update_layout(**PLOT_LAYOUT, height=320)
+            st.plotly_chart(fig_dist, use_container_width=True)
+        with d2:
+            _pg = (_invest_google / _invest_api * 100) if _invest_api > 0 else 0
+            _pm = (_invest_meta   / _invest_api * 100) if _invest_api > 0 else 0
+            st.markdown(f"""
+            <div class="insight-box">
+            💡 Neste mês:<br><br>
+            🔵 <strong>Google Ads</strong>: <strong>{_pg:.1f}%</strong> do total ({fmt_usd(_invest_google)})<br>
+            🔷 <strong>Meta Ads</strong>: <strong>{_pm:.1f}%</strong> do total ({fmt_usd(_invest_meta)})<br><br>
+            Para cada <strong>{fmt_usd(1)}</strong> investido → <strong>{fmt_usd(_roas_r)}</strong> em receita (ROAS Real).
+            </div>""", unsafe_allow_html=True)
+
+    if not _fonte_api:
+        st.warning("⚠️ APIs sem dados para este período. Usando valores da planilha.")
+
+
+# ════════════════════════════════════════════
+# ABA 3 — ANÁLISE POR CANAL
+# ════════════════════════════════════════════
+with tab3:
     if df_c_mes.empty or C["canal"] not in df_c_mes.columns:
         st.info("Sem dados de canais para o período selecionado.")
     else:
         st.markdown('<div class="section-title">📋 Tabela Estratégica por Canal</div>', unsafe_allow_html=True)
-
-        agg_map = {col: "sum" for col in COLS_BASE if col in df_c_mes.columns}
-        df_tab = df_c_mes.groupby(C["canal"]).agg(agg_map).reset_index()
-        df_tab = calc_derived(df_tab)
-
-        # Display formatado
+        df_tab = calc_derived(df_c_mes.groupby(C["canal"]).agg({c:"sum" for c in COLS_BASE if c in df_c_mes.columns}).reset_index())
         col_map = {
-            C["canal"]:   "Canal",
-            C["leads"]:   "Leads",
-            C["vendas"]:  "Vendas",
-            C["conv"]:    "Conversão %",
-            C["receita"]: "Receita (USD)",
-            C["invest"]:  "Investimento (USD)",
-            C["cpl"]:     "CPL",
-            C["cpv"]:     "CPA",
-            C["roas"]:    "ROAS",
-            C["ticket"]:  "Ticket Médio",
+            C["canal"]:"Canal", C["leads"]:"Leads", C["vendas"]:"Vendas",
+            C["conv"]:"Conversão %", C["receita"]:"Receita (USD)", C["invest"]:"Investimento (USD)",
+            C["cpl"]:"CPL", C["cpv"]:"CPA", C["roas"]:"ROAS", C["ticket"]:"Ticket Médio",
         }
-        cols_exist = [c for c in col_map if c in df_tab.columns]
-        df_disp = df_tab[cols_exist].rename(columns=col_map).copy()
-
-        for col in ["Receita (USD)", "Investimento (USD)", "CPL", "CPA", "Ticket Médio"]:
-            if col in df_disp.columns:
-                df_disp[col] = df_disp[col].apply(fmt_usd)
-        if "Conversão %" in df_disp.columns:
-            df_disp["Conversão %"] = df_disp["Conversão %"].apply(fmt_pct)
-        if "ROAS" in df_disp.columns:
-            df_disp["ROAS"] = df_disp["ROAS"].apply(fmt_x)
-
+        df_disp = df_tab[[c for c in col_map if c in df_tab.columns]].rename(columns=col_map).copy()
+        for col in ["Receita (USD)","Investimento (USD)","CPL","CPA","Ticket Médio"]:
+            if col in df_disp.columns: df_disp[col] = df_disp[col].apply(fmt_usd)
+        if "Conversão %" in df_disp.columns: df_disp["Conversão %"] = df_disp["Conversão %"].apply(fmt_pct)
+        if "ROAS"        in df_disp.columns: df_disp["ROAS"]        = df_disp["ROAS"].apply(fmt_x)
         st.dataframe(df_disp, use_container_width=True, hide_index=True)
 
-        # Insights
-        insights = []
-        if C["roas"]   in df_tab.columns and df_tab[C["roas"]].sum()   > 0:
-            insights.append(f"🏆 Melhor ROAS: <strong>{df_tab.loc[df_tab[C['roas']].idxmax(),   C['canal']]}</strong>")
-        if C["cpl"]    in df_tab.columns and df_tab[C["cpl"]].sum()    > 0:
-            insights.append(f"💰 Menor CPL: <strong>{df_tab.loc[df_tab[C['cpl']].idxmin(),    C['canal']]}</strong>")
-        if C["cpv"]    in df_tab.columns and df_tab[C["cpv"]].sum()    > 0:
-            insights.append(f"🎯 Menor CPA: <strong>{df_tab.loc[df_tab[C['cpv']].idxmin(),    C['canal']]}</strong>")
-        if C["conv"]   in df_tab.columns and df_tab[C["conv"]].sum()   > 0:
-            insights.append(f"📈 Maior Conversão: <strong>{df_tab.loc[df_tab[C['conv']].idxmax(),  C['canal']]}</strong>")
-        if C["ticket"] in df_tab.columns and df_tab[C["ticket"]].sum() > 0:
-            insights.append(f"💎 Maior Ticket: <strong>{df_tab.loc[df_tab[C['ticket']].idxmax(), C['canal']]}</strong>")
-        if insights:
-            st.markdown(f'<div class="insight-box">{"  ·  ".join(insights)}</div>', unsafe_allow_html=True)
+        ins = []
+        if C["roas"] in df_tab.columns and df_tab[C["roas"]].sum() > 0:
+            ins.append(f"🏆 Melhor ROAS: <strong>{df_tab.loc[df_tab[C['roas']].idxmax(), C['canal']]}</strong>")
+        if C["cpl"]  in df_tab.columns and df_tab[C["cpl"]].sum()  > 0:
+            ins.append(f"💰 Menor CPL: <strong>{df_tab.loc[df_tab[C['cpl']].idxmin(),  C['canal']]}</strong>")
+        if C["conv"] in df_tab.columns and df_tab[C["conv"]].sum() > 0:
+            ins.append(f"📈 Maior Conversão: <strong>{df_tab.loc[df_tab[C['conv']].idxmax(), C['canal']]}</strong>")
+        if ins:
+            st.markdown(f'<div class="insight-box">{"  ·  ".join(ins)}</div>', unsafe_allow_html=True)
 
-        # Gráficos
         st.markdown('<div class="section-title">📈 Comparativos por Canal</div>', unsafe_allow_html=True)
         gc1, gc2 = st.columns(2)
         with gc1:
             if C["roas"] in df_tab.columns:
-                # Maior ROAS no topo → ascending=False (plotly renderiza de baixo pra cima)
                 fig_r = px.bar(df_tab.sort_values(C["roas"], ascending=False),
                                x=C["roas"], y=C["canal"], orientation="h",
                                color=C["canal"], color_discrete_sequence=COLORS, title="ROAS por Canal")
                 fig_r.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
                 st.plotly_chart(fig_r, use_container_width=True)
             if C["cpv"] in df_tab.columns:
-                # Menor CPA no topo (melhor) → ascending=False
                 fig_cpa = px.bar(df_tab.sort_values(C["cpv"], ascending=False),
                                  x=C["cpv"], y=C["canal"], orientation="h",
-                                 color=C["canal"], color_discrete_sequence=COLORS, title="CPA por Canal (menor = melhor)")
+                                 color=C["canal"], color_discrete_sequence=COLORS, title="CPA por Canal")
                 fig_cpa.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
                 st.plotly_chart(fig_cpa, use_container_width=True)
         with gc2:
             if C["cpl"] in df_tab.columns:
-                # Menor CPL no topo (melhor) → ascending=False
                 fig_cpl = px.bar(df_tab.sort_values(C["cpl"], ascending=False),
                                  x=C["cpl"], y=C["canal"], orientation="h",
-                                 color=C["canal"], color_discrete_sequence=COLORS, title="CPL por Canal (menor = melhor)")
+                                 color=C["canal"], color_discrete_sequence=COLORS, title="CPL por Canal")
                 fig_cpl.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
                 st.plotly_chart(fig_cpl, use_container_width=True)
             if C["conv"] in df_tab.columns:
-                # Maior conversão no topo → ascending=False
                 fig_conv = px.bar(df_tab.sort_values(C["conv"], ascending=False),
                                   x=C["conv"], y=C["canal"], orientation="h",
                                   color=C["canal"], color_discrete_sequence=COLORS, title="Conversão % por Canal")
                 fig_conv.update_layout(**PLOT_LAYOUT, showlegend=False, height=300)
                 st.plotly_chart(fig_conv, use_container_width=True)
 
-        # Investimento vs Receita
-        st.markdown('<div class="section-title">💸 Investimento → Receita por Canal</div>', unsafe_allow_html=True)
-        df_iv = df_tab.melt(id_vars=C["canal"], value_vars=[c for c in [C["receita"], C["invest"]] if c in df_tab.columns],
-                            var_name="Métrica", value_name="Valor")
-        df_iv["Métrica"] = df_iv["Métrica"].map({C["receita"]: "Receita USD", C["invest"]: "Investimento USD"})
-        fig_iv = px.bar(df_iv, x=C["canal"], y="Valor", color="Métrica", barmode="group",
-                        color_discrete_sequence=[COLORS[0], COLORS[2]], title="Investimento vs Receita por Canal")
-        fig_iv.update_layout(**PLOT_LAYOUT, height=360)
-        st.plotly_chart(fig_iv, use_container_width=True)
-
 
 # ════════════════════════════════════════════
-# ABA 3 — PAGO VS ORGÂNICO
+# ABA 4 — PAGO VS ORGÂNICO
 # ════════════════════════════════════════════
-with tab3:
-    rec_p  = agg(df_p_mes, C["receita"])
-    rec_o  = agg(df_o_mes, C["receita"])
-    lead_p = agg(df_p_mes, C["leads"])
-    lead_o = agg(df_o_mes, C["leads"])
-    inv_p  = agg(df_p_mes, C["invest"])
-    roas_p = agg(df_p_mes, C["roas"])
-    roas_o = agg(df_o_mes, C["roas"])
-    cpl_p  = agg(df_p_mes, C["cpl"])
-
-    rec_tot  = rec_p  + rec_o
-    lead_tot = lead_p + lead_o
-
+with tab4:
+    rec_p  = agg(df_p_mes, C["receita"]); rec_o  = agg(df_o_mes, C["receita"])
+    lead_p = agg(df_p_mes, C["leads"]);   lead_o = agg(df_o_mes, C["leads"])
+    inv_p  = _invest_api if _fonte_api else agg(df_p_mes, C["invest"])
+    rec_tot  = rec_p + rec_o; lead_tot = lead_p + lead_o
     pct_rp = rec_p  / rec_tot  * 100 if rec_tot  else 0
     pct_ro = rec_o  / rec_tot  * 100 if rec_tot  else 0
     pct_lp = lead_p / lead_tot * 100 if lead_tot else 0
     pct_lo = lead_o / lead_tot * 100 if lead_tot else 0
 
     st.markdown('<div class="section-title">📊 Participação no Mês</div>', unsafe_allow_html=True)
-    pk1, pk2, pk3, pk4 = st.columns(4)
+    pk1,pk2,pk3,pk4 = st.columns(4)
     with pk1: kpi_card("% Receita Pago",     fmt_pct(pct_rp), "", "💰")
     with pk2: kpi_card("% Receita Orgânico", fmt_pct(pct_ro), "", "🌱")
     with pk3: kpi_card("% Leads Pago",       fmt_pct(pct_lp), "", "🎯")
     with pk4: kpi_card("% Leads Orgânico",   fmt_pct(pct_lo), "", "🌿")
 
-    # Insight dependência
-    if pct_rp > 70:
-        dep = f"⚠️ Negócio <strong>muito dependente de mídia paga</strong> ({pct_rp:.0f}%). Se desligar anúncios, restariam apenas <strong>{fmt_usd(rec_o)}</strong> em receita orgânica."
-    elif pct_rp > 50:
-        dep = f"📌 Pago domina com <strong>{pct_rp:.0f}%</strong>. Orgânico sustenta <strong>{fmt_usd(rec_o)}</strong>. Atenção à dependência crescente."
-    else:
-        dep = f"✅ Ótimo equilíbrio! Orgânico representa <strong>{pct_ro:.0f}%</strong>. Negócio tem base sólida sem anúncios."
+    if   pct_rp > 70: dep = f"⚠️ Negócio <strong>muito dependente de mídia paga</strong> ({pct_rp:.0f}%). Orgânico = <strong>{fmt_usd(rec_o)}</strong>."
+    elif pct_rp > 50: dep = f"📌 Pago domina com <strong>{pct_rp:.0f}%</strong>. Orgânico sustenta <strong>{fmt_usd(rec_o)}</strong>."
+    else:             dep = f"✅ Ótimo equilíbrio! Orgânico = <strong>{pct_ro:.0f}%</strong>."
     st.markdown(f'<div class="insight-box">{dep}</div>', unsafe_allow_html=True)
 
-    # Pizzas
     pg1, pg2 = st.columns(2)
     with pg1:
         if rec_tot > 0:
-            fig_pr = px.pie(values=[rec_p, rec_o], names=["Pago", "Orgânico"],
+            fig_pr = px.pie(values=[rec_p, rec_o], names=["Pago","Orgânico"],
                             title="Receita: Pago vs Orgânico",
                             color_discrete_sequence=[COLORS[0], COLORS[1]], hole=0.55)
             fig_pr.update_traces(textinfo="percent+label")
@@ -723,128 +762,57 @@ with tab3:
             st.plotly_chart(fig_pr, use_container_width=True)
     with pg2:
         if lead_tot > 0:
-            fig_pl = px.pie(values=[lead_p, lead_o], names=["Pago", "Orgânico"],
+            fig_pl = px.pie(values=[lead_p, lead_o], names=["Pago","Orgânico"],
                             title="Leads: Pago vs Orgânico",
                             color_discrete_sequence=[COLORS[2], COLORS[3]], hole=0.55)
             fig_pl.update_traces(textinfo="percent+label")
             fig_pl.update_layout(**PLOT_LAYOUT, height=320)
             st.plotly_chart(fig_pl, use_container_width=True)
 
-    # Evolução mensal
-    st.markdown('<div class="section-title">📅 Evolução Mensal</div>', unsafe_allow_html=True)
-    if not df_pago.empty and not df_organico.empty and C["mes"] in df_pago.columns:
+    if not df_pago.empty and C["mes"] in df_pago.columns:
+        st.markdown('<div class="section-title">📅 Evolução Mensal</div>', unsafe_allow_html=True)
         fig_evo = go.Figure()
         if C["receita"] in df_pago.columns:
             fig_evo.add_trace(go.Scatter(x=df_pago[C["mes"]], y=df_pago[C["receita"]],
                                          name="Receita Pago", line=dict(color=COLORS[0], width=2.5),
                                          mode="lines+markers", fill="tozeroy",
-                                         fillcolor="rgba(0,201,167,0.08)", marker=dict(size=7)))
-        if C["receita"] in df_organico.columns:
+                                         fillcolor="rgba(224,64,251,0.08)", marker=dict(size=7)))
+        if not df_organico.empty and C["receita"] in df_organico.columns:
             fig_evo.add_trace(go.Scatter(x=df_organico[C["mes"]], y=df_organico[C["receita"]],
                                          name="Receita Orgânico", line=dict(color=COLORS[1], width=2.5),
                                          mode="lines+markers", fill="tozeroy",
-                                         fillcolor="rgba(255,209,102,0.08)", marker=dict(size=7)))
+                                         fillcolor="rgba(255,64,129,0.08)", marker=dict(size=7)))
         if C["invest"] in df_pago.columns:
             fig_evo.add_trace(go.Scatter(x=df_pago[C["mes"]], y=df_pago[C["invest"]],
                                          name="Investimento Pago", line=dict(color=COLORS[2], width=2, dash="dot"),
                                          mode="lines+markers", marker=dict(size=6, symbol="diamond")))
-        fig_evo.update_layout(**PLOT_LAYOUT, title="Receita Pago vs Orgânico vs Investimento (USD)", height=400)
+        fig_evo.update_layout(**PLOT_LAYOUT, title="Receita Pago vs Orgânico vs Investimento", height=400)
         st.plotly_chart(fig_evo, use_container_width=True)
 
-    # ROAS evolução
-    if not df_pago.empty and not df_organico.empty and C["roas"] in df_pago.columns:
-        st.markdown('<div class="section-title">🚀 ROAS: Pago vs Orgânico</div>', unsafe_allow_html=True)
-        fig_revo = go.Figure()
-        fig_revo.add_trace(go.Scatter(x=df_pago[C["mes"]], y=df_pago[C["roas"]],
-                                      name="ROAS Pago", line=dict(color=COLORS[0], width=2.5),
-                                      mode="lines+markers", marker=dict(size=8)))
-        if C["roas"] in df_organico.columns:
-            fig_revo.add_trace(go.Scatter(x=df_organico[C["mes"]], y=df_organico[C["roas"]],
-                                          name="ROAS Orgânico", line=dict(color=COLORS[1], width=2.5, dash="dash"),
-                                          mode="lines+markers", marker=dict(size=8)))
-        fig_revo.update_layout(**PLOT_LAYOUT, title="Evolução do ROAS mês a mês", height=320)
-        st.plotly_chart(fig_revo, use_container_width=True)
-
-    # CAC pago
-    if not df_pago.empty and C["cpl"] in df_pago.columns and C["mes"] in df_pago.columns:
-        st.markdown('<div class="section-title">💸 CAC Pago ao Longo do Tempo</div>', unsafe_allow_html=True)
-        fig_cac = px.line(df_pago, x=C["mes"], y=C["cpl"], markers=True,
-                          title="CAC Pago (CPL) mês a mês", color_discrete_sequence=[COLORS[2]])
-        fig_cac.update_traces(line_width=2.5, marker_size=8)
-        fig_cac.update_layout(**PLOT_LAYOUT, height=300)
-        st.plotly_chart(fig_cac, use_container_width=True)
-
-        vals = df_pago[C["cpl"]].dropna().values
-        if len(vals) >= 2:
-            trend = "aumentando 📈 — custo crescente" if vals[-1] > vals[-2] else "diminuindo ✅ — eficiência melhorando"
-            st.markdown(f'<div class="insight-box">CAC pago está <strong>{trend}</strong>. Último valor: <strong>{fmt_usd(vals[-1])}</strong></div>',
-                        unsafe_allow_html=True)
-
 
 # ════════════════════════════════════════════
-# ABA 4 — INGRESSOS & VENDAS
+# ABA 5 — INGRESSOS & VENDAS
 # ════════════════════════════════════════════
-with tab4:
+with tab5:
     if df_vendas.empty:
         st.info("Sem dados de vendas disponíveis.")
     else:
         CV = {
-            "data":      "Data/hora da compra",
-            "genero":    "Gênero",
-            "valor":     "Valor total pago",
-            "taxas":     "Taxas",
-            "qtd":       "Qtd de ingressos",
-            "tipo":      "Tipo",
-            "tipo_ing":  "Tipo de ingresso",
-            "metodo":    "Método de pagamento",
-            "pais":      "País do comprador",
-            "reembolso": "Valor reembolsado",
+            "data":"Data/hora da compra", "genero":"Gênero", "valor":"Valor total pago",
+            "taxas":"Taxas", "qtd":"Qtd de ingressos", "tipo":"Tipo",
+            "tipo_ing":"Tipo de ingresso", "metodo":"Método de pagamento",
+            "pais":"País do comprador", "reembolso":"Valor reembolsado",
         }
-
-        # Filtra pelo mês selecionado
-        def _mes_to_period_tab4(v):
-            try:
-                parts = str(v).split("/")
-                if len(parts) == 2:
-                    return f"20{parts[1].strip()}-{parts[0].zfill(2)}"
-            except Exception:
-                pass
-            return str(v)
-        _periodo_tab4 = _mes_to_period_tab4(mes_sel)
-        if not df_vendas.empty and "_mes" in df_vendas.columns:
-            df_v = df_vendas[df_vendas["_mes"] == _periodo_tab4].copy()
-        else:
-            df_v = df_vendas.copy()
-
-        def parse_data(s):
-            s = str(s).strip()
-            # Formato ISO: 2026-02-20T18:35:46.000Z
-            if "T" in s and s.endswith("Z"):
-                try:
-                    return pd.to_datetime(s, format="%Y-%m-%dT%H:%M:%S.%fZ")
-                except Exception:
-                    try:
-                        return pd.to_datetime(s, utc=True).tz_localize(None)
-                    except Exception:
-                        pass
-            # Formato BR: 11/03/2026 15:53:05 ou 11/03/2026
-            if "/" in s:
-                try:
-                    return pd.to_datetime(s, dayfirst=True, errors="coerce")
-                except Exception:
-                    pass
-            return pd.NaT
-
-        # _mes já calculado no pré-processamento global
+        df_v = df_vendas[df_vendas["_mes"] == _mtp(mes_sel)].copy() if "_mes" in df_vendas.columns else df_vendas.copy()
 
         st.markdown('<div class="section-title">🎟️ KPIs de Ingressos</div>', unsafe_allow_html=True)
-        receita_v   = df_v[CV["valor"]].sum()      if CV["valor"]     in df_v.columns else 0
-        taxas_v     = df_v[CV["taxas"]].sum()      if CV["taxas"]     in df_v.columns else 0
-        qtd_v       = df_v[CV["qtd"]].sum()        if CV["qtd"]       in df_v.columns else 0
-        reembolso_v = df_v[CV["reembolso"]].sum()  if CV["reembolso"] in df_v.columns else 0
+        receita_v   = df_v[CV["valor"]].sum()     if CV["valor"]     in df_v.columns else 0
+        taxas_v     = df_v[CV["taxas"]].sum()     if CV["taxas"]     in df_v.columns else 0
+        qtd_v       = df_v[CV["qtd"]].sum()       if CV["qtd"]       in df_v.columns else 0
+        reembolso_v = df_v[CV["reembolso"]].sum() if CV["reembolso"] in df_v.columns else 0
         n_compras   = len(df_v)
         ticket_v    = receita_v / n_compras if n_compras > 0 else 0
-        media_ing   = qtd_v / n_compras if n_compras > 0 else 0
+        media_ing   = qtd_v     / n_compras if n_compras > 0 else 0
 
         k1,k2,k3,k4,k5,k6 = st.columns(6)
         with k1: kpi_card("Receita Total",      fmt_usd(receita_v),   "", "💰")
@@ -857,21 +825,19 @@ with tab4:
         st.markdown("---")
         st.markdown('<div class="section-title">👥 Perfil do Comprador</div>', unsafe_allow_html=True)
         col_a, col_b = st.columns(2)
-
         with col_a:
             if CV["genero"] in df_v.columns:
                 df_gen = df_v.groupby(CV["genero"])[CV["valor"]].sum().reset_index()
-                df_gen.columns = ["Gênero", "Receita"]
+                df_gen.columns = ["Gênero","Receita"]
                 fig_gen = px.pie(df_gen, names="Gênero", values="Receita", title="Receita por Gênero",
                                  color_discrete_sequence=COLORS, hole=0.5)
                 fig_gen.update_traces(textinfo="percent+label")
                 fig_gen.update_layout(**PLOT_LAYOUT, height=320)
                 st.plotly_chart(fig_gen, use_container_width=True)
-
         with col_b:
             if CV["tipo"] in df_v.columns:
                 df_tipo = df_v.groupby(CV["tipo"])[CV["qtd"]].sum().reset_index()
-                df_tipo.columns = ["Tipo", "Qtd"]
+                df_tipo.columns = ["Tipo","Qtd"]
                 fig_tipo = px.pie(df_tipo, names="Tipo", values="Qtd", title="Ingressos por Tipo",
                                   color_discrete_sequence=COLORS, hole=0.5)
                 fig_tipo.update_traces(textinfo="percent+label")
@@ -882,18 +848,17 @@ with tab4:
         with col_c:
             if CV["tipo_ing"] in df_v.columns:
                 df_ti = df_v.groupby(CV["tipo_ing"])[CV["qtd"]].sum().reset_index()
-                df_ti.columns = ["Tipo de Ingresso", "Qtd"]
+                df_ti.columns = ["Tipo de Ingresso","Qtd"]
                 df_ti = df_ti.sort_values("Qtd", ascending=False)
                 fig_ti = px.bar(df_ti, x="Qtd", y="Tipo de Ingresso", orientation="h",
                                 color="Tipo de Ingresso", color_discrete_sequence=COLORS,
                                 title="Quantidade por Tipo de Ingresso")
                 fig_ti.update_layout(**PLOT_LAYOUT, showlegend=False, height=320)
                 st.plotly_chart(fig_ti, use_container_width=True)
-
         with col_d:
             if CV["metodo"] in df_v.columns:
                 df_met = df_v.groupby(CV["metodo"])[CV["valor"]].sum().reset_index()
-                df_met.columns = ["Método", "Receita"]
+                df_met.columns = ["Método","Receita"]
                 fig_met = px.pie(df_met, names="Método", values="Receita",
                                  title="Receita por Método de Pagamento",
                                  color_discrete_sequence=COLORS, hole=0.5)
@@ -906,18 +871,16 @@ with tab4:
         with col_e:
             if CV["pais"] in df_v.columns:
                 df_pais = df_v.groupby(CV["pais"])[CV["qtd"]].sum().reset_index()
-                df_pais.columns = ["País", "Qtd"]
+                df_pais.columns = ["País","Qtd"]
                 df_pais = df_pais.sort_values("Qtd", ascending=False)
                 fig_pais = px.bar(df_pais, x="Qtd", y="País", orientation="h",
-                                  color="País", color_discrete_sequence=COLORS,
-                                  title="Ingressos por País")
+                                  color="País", color_discrete_sequence=COLORS, title="Ingressos por País")
                 fig_pais.update_layout(**PLOT_LAYOUT, showlegend=False, height=360)
                 st.plotly_chart(fig_pais, use_container_width=True)
-
         with col_f:
             if CV["pais"] in df_v.columns:
                 df_pais_r = df_v.groupby(CV["pais"])[CV["valor"]].sum().reset_index()
-                df_pais_r.columns = ["País", "Receita"]
+                df_pais_r.columns = ["País","Receita"]
                 fig_pais_r = px.pie(df_pais_r, names="País", values="Receita",
                                     title="Participação de Receita por País",
                                     color_discrete_sequence=COLORS, hole=0.5)
@@ -926,23 +889,17 @@ with tab4:
                 st.plotly_chart(fig_pais_r, use_container_width=True)
 
         st.markdown('<div class="section-title">📅 Vendas por Mês</div>', unsafe_allow_html=True)
-        if "_mes" in df_v.columns:
-            df_mes_v = df_v.groupby("_mes").agg(
-                Receita=(CV["valor"], "sum"),
-                Ingressos=(CV["qtd"], "sum"),
-            ).reset_index().rename(columns={"_mes": "Mês"})
-            # Converte período para nome legível ex: "2026-02" → "Fev/2026"
-            MESES_LABEL = {"01":"Jan","02":"Fev","03":"Mar","04":"Abr","05":"Mai","06":"Jun",
-                           "07":"Jul","08":"Ago","09":"Set","10":"Out","11":"Nov","12":"Dez"}
-            def mes_label(p):
-                try:
-                    partes = str(p).split("-")
-                    return f"{MESES_LABEL.get(partes[1], partes[1])}/{partes[0]}"
-                except Exception:
-                    return str(p)
-            df_mes_v["Mês_Label"] = df_mes_v["Mês"].apply(mes_label)
+        if "_mes" in df_vendas.columns:
+            df_mes_v = df_vendas.groupby("_mes").agg(
+                Receita=(CV["valor"],"sum"), Ingressos=(CV["qtd"],"sum")
+            ).reset_index().rename(columns={"_mes":"Mês"})
+            ML = {"01":"Jan","02":"Fev","03":"Mar","04":"Abr","05":"Mai","06":"Jun",
+                  "07":"Jul","08":"Ago","09":"Set","10":"Out","11":"Nov","12":"Dez"}
+            def _ml(p):
+                try: pt = str(p).split("-"); return f"{ML.get(pt[1],pt[1])}/{pt[0]}"
+                except Exception: return str(p)
+            df_mes_v["Mês_Label"] = df_mes_v["Mês"].apply(_ml)
             df_mes_v = df_mes_v.sort_values("Mês")
-
             fig_mv = go.Figure()
             fig_mv.add_trace(go.Bar(x=df_mes_v["Mês_Label"], y=df_mes_v["Receita"],
                                     name="Receita", marker_color=COLORS[0], opacity=0.9))
@@ -950,31 +907,31 @@ with tab4:
                                         name="Ingressos", mode="lines+markers",
                                         line=dict(color=COLORS[1], width=2.5),
                                         marker=dict(size=7), yaxis="y2"))
-            layout_mv = dict(PLOT_LAYOUT)
-            layout_mv["xaxis"] = dict(type="category", gridcolor="rgba(224,64,251,0.08)")
-            layout_mv["yaxis2"] = dict(overlaying="y", side="right", gridcolor="rgba(0,0,0,0)", color="#9E7BB5")
-            layout_mv["title"] = "Receita e Ingressos por Mês"
-            layout_mv["height"] = 360
-            fig_mv.update_layout(**layout_mv)
+            lyt_mv = dict(PLOT_LAYOUT)
+            lyt_mv["xaxis"]  = dict(type="category", gridcolor="rgba(224,64,251,0.08)")
+            lyt_mv["yaxis2"] = dict(overlaying="y", side="right", gridcolor="rgba(0,0,0,0)", color="#9E7BB5")
+            lyt_mv["title"]  = "Receita e Ingressos por Mês"
+            lyt_mv["height"] = 360
+            fig_mv.update_layout(**lyt_mv)
             st.plotly_chart(fig_mv, use_container_width=True)
 
         st.markdown('<div class="section-title">🔀 Cruzamento: Marketing × Vendas</div>', unsafe_allow_html=True)
-        invest_total = agg(df_total, C["invest"]) if not df_total.empty else agg(df_pago, C["invest"])
-        leads_total  = agg(df_total, C["leads"])  if not df_total.empty else 0
-        roas_real    = receita_v / invest_total if invest_total > 0 else 0
-        cpv_real     = invest_total / n_compras  if n_compras   > 0 else 0
-        cpl_real     = invest_total / leads_total if leads_total > 0 else 0
+        _inv_cx  = _invest_api if _fonte_api else agg(df_t_mes, C["invest"])
+        _leads_cx = agg(df_t_mes, C["leads"])
+        _roas_cx  = receita_v / _inv_cx  if _inv_cx   > 0 else 0
+        _cpv_cx   = _inv_cx   / n_compras if n_compras > 0 else 0
+        _cpl_cx   = _inv_cx   / _leads_cx if _leads_cx > 0 else 0
 
         cx1,cx2,cx3,cx4 = st.columns(4)
-        with cx1: kpi_card("Investimento Total", fmt_usd(invest_total), "", "💸")
-        with cx2: kpi_card("ROAS Real",          fmt_x(roas_real),      "", "🚀")
-        with cx3: kpi_card("Custo por Venda",    fmt_usd(cpv_real),     "", "🎯")
-        with cx4: kpi_card("Custo por Lead",     fmt_usd(cpl_real),     "", "📊")
+        with cx1: kpi_card("Investimento Total", fmt_usd(_inv_cx),  "", "💸")
+        with cx2: kpi_card("ROAS Real",          fmt_x(_roas_cx),   "", "🚀")
+        with cx3: kpi_card("Custo por Venda",    fmt_usd(_cpv_cx),  "", "🎯")
+        with cx4: kpi_card("Custo por Lead",     fmt_usd(_cpl_cx),  "", "📊")
 
         st.markdown(
-            f'<div class="insight-box">🔀 Para cada <strong>{fmt_usd(1)}</strong> investido, a Imagine Cave gerou ' +
-            f'<strong>{fmt_usd(roas_real)}</strong> em receita (ROAS real). ' +
-            f'Custo por venda: <strong>{fmt_usd(cpv_real)}</strong> · Custo por lead: <strong>{fmt_usd(cpl_real)}</strong>.</div>',
+            f'<div class="insight-box">🔀 Para cada <strong>{fmt_usd(1)}</strong> investido, a Imagine Cave gerou '
+            f'<strong>{fmt_usd(_roas_cx)}</strong> em receita (ROAS real). '
+            f'Custo por venda: <strong>{fmt_usd(_cpv_cx)}</strong> · Custo por lead: <strong>{fmt_usd(_cpl_cx)}</strong>.</div>',
             unsafe_allow_html=True
         )
 
