@@ -598,7 +598,6 @@ with tab1:
 
     # Linha de fonte do investimento — corrigida com unsafe_allow_html=True
     st.markdown(f'<small>Investimento via: {badge(_fonte_api)} &nbsp;|&nbsp; 🔵 Google Ads: <strong>{fmt_usd(_invest_google)}</strong> &nbsp;·&nbsp; 🔷 Meta Ads: <strong>{fmt_usd(_invest_meta)}</strong></small>', unsafe_allow_html=True)
-
     if r_prv > 0:
         var = ((receita - r_prv) / r_prv) * 100
         if var >= 0: st.success(f"📈 Crescemos **{var:.1f}%** vs mês anterior ({fmt_usd(r_prv)} → {fmt_usd(receita)})")
