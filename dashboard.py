@@ -597,7 +597,8 @@ with tab1:
     with c6: kpi_card("ROAS",            fmt_x(roas),      delta_html(roas,    roas_prv),            "🚀")
 
     # Linha de fonte do investimento — corrigida com unsafe_allow_html=True
-    st.markdown(f'<small>Investimento via: {badge(_fonte_api)} &nbsp;|&nbsp; 🔵 Google Ads: <strong>{fmt_usd(_invest_google)}</strong> &nbsp;·&nbsp; 🔷 Meta Ads: <strong>{fmt_usd(_invest_meta)}</strong></small>', unsafe_allow_html=True)
+    _badge_html = "🟢 API" if _fonte_api else "🟡 Planilha"
+    st.caption(f"Investimento via: {_badge_html}  |  🔵 Google Ads: {fmt_usd(_invest_google)}  ·  🔷 Meta Ads: {fmt_usd(_invest_meta)}")
     if r_prv > 0:
         var = ((receita - r_prv) / r_prv) * 100
         if var >= 0: st.success(f"📈 Crescemos **{var:.1f}%** vs mês anterior ({fmt_usd(r_prv)} → {fmt_usd(receita)})")
