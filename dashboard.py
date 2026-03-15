@@ -506,6 +506,14 @@ with st.spinner("🔄 Buscando investimento do Google Ads e Meta Ads..."):
     _invest_api    = round(_invest_google + _invest_meta, 2)
     _fonte_api     = _invest_api > 0                   # True = veio das APIs
 
+# BLOCO DE DEBUG — remover após resolver
+with st.expander("🔧 Debug APIs"):
+    st.write(f"mes_sel: `{mes_sel}`")
+    start, end = _month_date_range(mes_sel)
+    st.write(f"start: `{start}` | end: `{end}`")
+    st.write(f"Google Ads spend: `{_invest_google}`")
+    st.write(f"Meta spend: `{_invest_meta}`")
+
 # Fallback: se APIs não retornaram, usa soma da planilha
 _invest_planilha = agg(df_t_mes, C["invest"]) if not df_t_mes.empty else agg(df_c_mes, C["invest"])
 _invest_final    = _invest_api if _fonte_api else _invest_planilha
