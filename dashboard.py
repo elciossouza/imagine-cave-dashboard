@@ -507,47 +507,6 @@ with st.spinner("🔄 Buscando investimento do Google Ads e Meta Ads..."):
     _fonte_api     = _invest_api > 0                   # True = veio das APIs
 
 # BLOCO DE DEBUG — remover após resolver
-with st.expander("🔧 Debug APIs"):
-    st.write(f"mes_sel: `{mes_sel}`")
-    start, end = _month_date_range(mes_sel)
-    st.write(f"start: `{start}` | end: `{end}`")
-    st.write(f"Google Ads spend: `{_invest_google}`")
-    st.write(f"Meta spend: `{_invest_meta}`")
-
-    # Testa Google Ads diretamente
-    st.write("--- Testando Google Ads ---")
-    try:
-        from google.ads.googleads.client import GoogleAdsClient
-        cfg = {
-            "developer_token":   st.secrets["google_ads"]["developer_token"],
-            "client_id":         st.secrets["google_ads"]["client_id"],
-            "client_secret":     st.secrets["google_ads"]["client_secret"],
-            "refresh_token":     st.secrets["google_ads"]["refresh_token"],
-            "login_customer_id": str(st.secrets["google_ads"]["login_customer_id"]),
-            "use_proto_plus":    True,
-        }
-        client  = GoogleAdsClient.load_from_dict(cfg)
-        st.write("✅ Google Ads client criado com sucesso")
-        cust_id = str(st.secrets["google_ads"]["customer_id"]).replace("-", "")
-        st.write(f"customer_id: `{cust_id[:4]}****`")
-    except Exception as e:
-        st.error(f"❌ Google Ads erro: {str(e)[:200]}")
-
-    # Testa Meta diretamente
-    st.write("--- Testando Meta Ads ---")
-    try:
-        from facebook_business.api import FacebookAdsApi
-        from facebook_business.adobjects.adaccount import AdAccount
-        FacebookAdsApi.init(access_token=st.secrets["meta_ads"]["access_token"])
-        account  = AdAccount(st.secrets["meta_ads"]["ad_account_id"])
-        insights = account.get_insights(params={
-            "time_range": {"since": start, "until": end},
-            "level": "account",
-            "fields": ["spend"],
-        })
-        st.write(f"✅ Meta retornou: `{list(insights)}`")
-    except Exception as e:
-        st.error(f"❌ Meta Ads erro: {str(e)[:200]}")
 
 # Fallback: se APIs não retornaram, usa soma da planilha
 _invest_planilha = agg(df_t_mes, C["invest"]) if not df_t_mes.empty else agg(df_c_mes, C["invest"])
