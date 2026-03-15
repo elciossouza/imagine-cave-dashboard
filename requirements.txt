@@ -4,3 +4,5 @@ google-auth
 pandas
 plotly
 numpy
+facebook-business
+google-ads
