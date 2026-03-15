@@ -598,10 +598,11 @@ with tab1:
 
     # Linha de fonte do investimento — corrigida com unsafe_allow_html=True
     st.markdown(
-        f"<small>Investimento via: {badge(_fonte_api)} &nbsp;|&nbsp; "
-        f"🔵 Google Ads: <strong>{fmt_usd(_invest_google)}</strong> "
-        f"&nbsp;·&nbsp; "
-        f"🔷 Meta Ads: <strong>{fmt_usd(_invest_meta)}</strong></small>",
+        st.markdown(
+        f'<small>Investimento via: {badge(_fonte_api)} &nbsp;|&nbsp; '
+        f'🔵 Google Ads: <strong>{fmt_usd(_invest_google)}</strong> '
+        f'&nbsp;·&nbsp; '
+        f'🔷 Meta Ads: <strong>{fmt_usd(_invest_meta)}</strong></small>',
         unsafe_allow_html=True
     )
 
